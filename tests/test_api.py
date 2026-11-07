@@ -19,7 +19,7 @@ from shapely.geometry import box, mapping
 from sqlalchemy import create_engine, text
 
 from orbitdiff import api, catalog, db, jobs
-from orbitdiff.config import REPO_ROOT, settings
+from orbitdiff.config import REPO_ROOT, pipeline_config, settings
 
 TEST_DB = os.environ.get("ORBITDIFF_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="set ORBITDIFF_TEST_DATABASE_URL")
@@ -113,6 +113,10 @@ def test_the_size_cap_is_enforced_at_the_api(client):
     point = {"type": "Point", "coordinates": [30.7, 50.39]}
     assert client.post("/aois", json={"name": "x", "geometry": point}).status_code == 422
     assert client.queued == []
+
+
+def test_limits_report_the_configured_size_cap(client):
+    assert client.get("/limits").json() == {"max_area_km2": pipeline_config().aoi.max_km2}
 
 
 def test_unknown_aoi_is_404(client):

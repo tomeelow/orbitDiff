@@ -1,0 +1,185 @@
+/* Hallmark · shape: app screen · genre: modern-minimal · theme: Rim (by request, dark and light)
+ * nav: top bar · signature: the archive strip (clear passes per month, A/B cursors, NDVI line) · states: loading, empty, error, full, backfill in progress, filled month
+ * axes: dark+light/grotesk-sans/warm · posture: committed · contrast: pass · v2.0.0 */
+/* Hallmark · pre-emit critique: P3 H3 E3 S3 R3 V3 · weakest: S, accent kept to the primary action, cursor B and the drawn outline; clear passes are green by request */
+
+:root {
+  --space-3xs: 2px;
+  --space-2xs: 4px;
+  --space-xs: 8px;
+  --space-sm: 12px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 40px;
+  --space-2xl: 64px;
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-md: 1rem;
+  --text-lg: 1.2rem;
+  --text-xl: 1.44rem;
+  --text-2xl: 1.728rem;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-micro: 120ms;
+  --dur-short: 220ms;
+  --font-display: "Switzer", ui-sans-serif, system-ui, sans-serif;
+  --font-body: var(--font-display);
+  --font-figure: "Geist Mono", ui-monospace, monospace;
+  --tracking-display: -0.04em;
+  --display-weight: 500;
+  --rule-hair: 1px;
+  --radius: 0;
+  --gutter: 32px;
+  --bar-height: 56px;
+  --panel-width: 360px;
+  --z-map-ui: 10;
+  --z-bar: 300;
+  --z-tooltip: 600;
+  --color-on-map: oklch(97% 0.005 80);
+  --color-map-shade: oklch(12% 0.01 80 / 0.75);
+}
+
+/* Dark: Rim as designed. */
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --color-paper: oklch(9% 0.008 75);
+  --color-paper-2: oklch(12.5% 0.009 75);
+  --color-paper-3: oklch(6.5% 0.007 75);
+  --color-ink: oklch(94% 0.01 80);
+  --color-ink-2: oklch(84% 0.011 80);
+  --color-muted: oklch(68% 0.012 80);
+  --color-muted-2: oklch(50% 0.01 80);
+  --color-rule: oklch(25% 0.01 78);
+  --color-rule-2: oklch(16% 0.009 78);
+  --color-accent: oklch(72% 0.17 45);
+  --color-accent-ink: oklch(10% 0.02 45);
+  --color-accent-2: oklch(74% 0.12 250);
+  --color-accent-2-ink: oklch(10% 0.02 250);
+  --color-focus: oklch(78% 0.15 45);
+  --color-clear: oklch(72% 0.14 150); /* clear passes in the archive strip */
+  --color-error: oklch(72% 0.15 27);
+  --color-warn: oklch(80% 0.13 75);
+}
+
+/* Light: the same instrument printed on warm paper. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --color-paper: oklch(97% 0.006 80);
+  --color-paper-2: oklch(99% 0.004 80);
+  --color-paper-3: oklch(93% 0.008 80);
+  --color-ink: oklch(15% 0.01 75);
+  --color-ink-2: oklch(28% 0.011 78);
+  --color-muted: oklch(44% 0.012 78);
+  --color-muted-2: oklch(60% 0.01 78);
+  --color-rule: oklch(82% 0.01 78);
+  --color-rule-2: oklch(90% 0.008 78);
+  --color-accent: oklch(70% 0.17 45);
+  --color-accent-ink: oklch(14% 0.02 45);
+  --color-accent-2: oklch(50% 0.13 250);
+  --color-accent-2-ink: oklch(98% 0.005 250);
+  --color-focus: oklch(52% 0.17 45);
+  --color-clear: oklch(52% 0.13 150);
+  --color-error: oklch(50% 0.18 27);
+  --color-warn: oklch(50% 0.12 70);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+html,
+body {
+  overflow-x: clip;
+}
+html {
+  scrollbar-color: var(--color-muted-2) var(--color-paper);
+}
+body {
+  margin: 0;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-body);
+  font-size: var(--text-md);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  caret-color: var(--color-accent);
+}
+::selection {
+  background: color-mix(in oklab, var(--color-accent) 35%, transparent);
+  color: var(--color-ink);
+}
+:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+a {
+  color: inherit;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.16em;
+}
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: var(--display-weight);
+  letter-spacing: var(--tracking-display);
+  line-height: 1.1;
+  text-wrap: balance;
+  overflow-wrap: break-word;
+}
+h1 {
+  font-size: var(--text-2xl);
+}
+h2 {
+  font-size: var(--text-lg);
+}
+h3 {
+  font-size: var(--text-md);
+}
+p {
+  margin: 0;
+  text-wrap: pretty;
+}
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+[hidden] {
+  /* biome-ignore lint/complexity/noImportantStyles: hidden must win over any display rule */
+  display: none !important;
+}
+.fig {
+  font-family: var(--font-figure);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (max-width: 40rem) {
+  :root {
+    --gutter: 16px;
+  }
+}
+/* biome-ignore-start lint/complexity/noImportantStyles: reduced motion overrides every animation */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+/* biome-ignore-end lint/complexity/noImportantStyles: reduced motion overrides every animation */

@@ -108,6 +108,15 @@ class SceneOut(BaseModel):
     images: dict[str, str] | None  # only for passes whose bands were read
 
 
+class Limits(BaseModel):
+    max_area_km2: float  # the AOI size cap, shown while drawing
+
+
+@app.get("/limits")
+def limits() -> Limits:
+    return Limits(max_area_km2=pipeline_config().aoi.max_km2)
+
+
 def _aoi(s: Session, aoi_id: int) -> db.Aoi:
     aoi = s.get(db.Aoi, aoi_id)
     if aoi is None:

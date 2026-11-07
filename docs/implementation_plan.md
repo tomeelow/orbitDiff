@@ -343,6 +343,15 @@ The mockup's visual language (tokens, type, layout) is a starting point, not a r
 
 **Deliverable:** draw an area, watch the backfill progress, then browse ten years of it.
 
+> **As built (2026-11-07):**
+> - `web/` is Vite, React 19 and TypeScript (strict), with MapLibre 6 and Terra Draw; Biome, Vitest and pnpm. The theme is Hallmark's Rim, in dark and light (the system's choice until the user picks one), and it works at phone width.
+> - Drawing shows the area against the cap from `GET /limits` and refuses to submit over it; the API still enforces the cap.
+> - The archive strip shows all passes and clear passes per month (clear in green), hatches months with no clear pass, and draws the mean NDVI line under it. Clicking moves the active cursor; ←/→ step it, Shift jumps a year, Space plays one month per second while the next month's tiles are fetched ahead.
+> - The default pair is the latest observed month against the same month a year earlier. A note under the map warns when a month is gap-filled or partly filled, or when A and B are different seasons.
+> - Swipe is two synced maps (ADR-011). Month B can show the composite or one pass; the pass list gives each pass's AOI clear share or why it was left out.
+> - The hover readout asks TiTiler for the pixel's NDVI and whether it was filled for display.
+> - Basemap: OpenFreeMap, configurable (ADR-011). Changes and alerts are not in the UI yet: their backend arrives with Phases 7 and 9.
+
 ---
 
 ## Phase 6 — Evaluation Set and Naive Baseline
