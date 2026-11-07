@@ -30,6 +30,10 @@ GDAL_ENV = {
     "GDAL_HTTP_VERSION": "2",
     "GDAL_HTTP_MAX_RETRY": "4",
     "GDAL_HTTP_RETRY_DELAY": "1",
+    # GDAL retries HTTP 429 and 5xx above, not a dropped or stalled connection: with these,
+    # one fails the read in seconds instead of hanging it, and fetch_aoi tries it again.
+    "GDAL_HTTP_CONNECTTIMEOUT": "15",
+    "GDAL_HTTP_TIMEOUT": "120",
     "AWS_NO_SIGN_REQUEST": "YES",
     "VSI_CACHE": "TRUE",
 }
