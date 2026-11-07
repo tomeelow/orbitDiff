@@ -74,6 +74,10 @@ class MaskingConfig(_Section):
         return self
 
 
+class CompositesConfig(_Section):
+    fill_max_months: int = Field(ge=0)
+
+
 class DetectionConfig(_Section):
     min_mapping_unit_ha: float = Field(gt=0)
     seasonal_revert_months: int = Field(ge=1)
@@ -89,6 +93,7 @@ class PipelineConfig(_Section):
     catalog: CatalogConfig
     reading: ReadingConfig
     masking: MaskingConfig
+    composites: CompositesConfig
     detection: DetectionConfig
     schedule: ScheduleConfig
 

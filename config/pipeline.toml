@@ -35,6 +35,9 @@ cloud_model = "omnicloudmask"     # learned model on top of SCL, for haze and th
 cloud_model_version = 4.0         # pinned: a new version means rerunning every AOI's masks
 cloud_model_classes = [1, 2, 3]   # model classes masked: thick cloud, thin cloud, shadow
 
+[composites]
+fill_max_months = 3               # display only: fill a pixel from clear months at most this far away
+
 [detection]
 min_mapping_unit_ha = 0.1         # floor under the user's "smallest change" slider (10 pixels)
 seasonal_revert_months = 3        # a change that reverts within this is seasonal
