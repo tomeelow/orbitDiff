@@ -32,6 +32,7 @@ from orbitdiff.detection import (
     CATEGORIES,
     YEAR,
     Event,
+    Learned,
     Passes,
     detect,
     load_stack,
@@ -233,6 +234,45 @@ class Scores:
         return statistics.median(self.delays) if self.delays else None
 
 
+def f1(s: Scores) -> float | None:
+    """Event F1; with labels but no alerts, 0."""
+    if s.recall is None:
+        return None
+    p, r = s.precision or 0.0, s.recall
+    return 2 * p * r / (p + r) if p + r else 0.0
+
+
+def gate(
+    candidate: Scores, champion: Scores, baseline: Scores, recall_tolerance: float
+) -> list[str]:
+    """Why a candidate model may not replace the champion; empty when it may (Phase 8).
+    Scored with production's alerts with each model in place, the candidate must not
+    raise false alerts per AOI-year, not lose more than `recall_tolerance` of event recall,
+    and must beat the naive baseline's event F1."""
+    values = (
+        candidate.false_alerts_per_aoi_year,
+        champion.false_alerts_per_aoi_year,
+        candidate.recall,
+        champion.recall,
+        f1(candidate),
+        f1(baseline),
+    )
+    if any(v is None for v in values):
+        return ["the evaluation set can't score it: it needs AOI-years and labelled changes"]
+    fa_new, fa_old, recall_new, recall_old, f1_new, f1_base = values
+    reasons = []
+    if fa_new > fa_old:
+        reasons.append(f"false alerts per AOI-year rise from {fa_old:.2f} to {fa_new:.2f}")
+    if recall_new < recall_old - recall_tolerance:
+        reasons.append(
+            f"event recall falls from {recall_old:.2f} to {recall_new:.2f}, "
+            f"more than the {recall_tolerance:.2f} allowed"
+        )
+    if not f1_new > f1_base:
+        reasons.append(f"event F1 {f1_new:.2f} doesn't beat the naive baseline's {f1_base:.2f}")
+    return reasons
+
+
 @dataclass(frozen=True)
 class Report:
     overall: Scores
@@ -339,11 +379,17 @@ def evaluate(
     data_dir: Path,
     folder: Path = EVAL_DIR,
     fetch: bool = False,
+    buildings: Learned | None = None,
 ) -> tuple[dict[str, Report], str, bool]:
-    """Score each named method over the evaluation set. Returns the reports, the set's
-    version and whether every AOI in it is verified."""
+    """Score each named method over the evaluation set, with `buildings` as the building
+    model if given. Returns the reports, the set's version and whether every AOI in it is
+    verified."""
     aois, version = load_eval_set(folder)
-    chosen = {name: methods(cfg.detection)[name] for name in names}
+    available = methods(cfg.detection, buildings)
+    unknown = set(names) - set(available)
+    if unknown:
+        raise ValueError(f"unknown methods {sorted(unknown)}; there are {sorted(available)}")
+    chosen = {name: available[name] for name in names}
     runs: dict[str, list[AoiRun]] = {}
     for aoi in aois:
         grid = make_grid(f"eval-{aoi.name}", aoi.geometry, cfg.aoi.max_km2)

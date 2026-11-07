@@ -27,6 +27,7 @@ Every status records the pass or month that caused it.
 import hashlib
 import json
 import warnings
+import weakref
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -53,6 +54,7 @@ YEAR = 12  # months
 CACHED_MONTHS = 2 * YEAR + 2  # pass months kept in memory: a reference year and a margin
 FIT_CHUNK = 20_000  # pixels per batch of the seasonal fit, to bound memory
 CLAIM_RING_PX = 2  # an event also holds this ring of pixels around it for its year
+KEPT_VERDICTS = 256  # a learned detector's verdicts kept, ~90 kB each on a 300 px AOI
 # Bump when a change to the code here changes what becomes an event or its status; it goes
 # into every event's method version along with the thresholds.
 RULES_REVISION = 2  # 2: snow is seasonal; seasonal means "looked like this before"
@@ -76,12 +78,17 @@ class Stack:
     values: np.ndarray
     snow: np.ndarray | None = None  # (month, y, x): snow in a clear observation that month
 
+    def __post_init__(self) -> None:
+        # One view per month, the same object every time: a learned detector keeps its
+        # verdicts by the arrays it was given.
+        object.__setattr__(self, "_frames", tuple(self.values))
+
     def index(self, month: str) -> int:
         return month_gap(self.months[0], month) if self.months else -1
 
     def at(self, month: str) -> np.ndarray | None:
         i = self.index(month)
-        return self.values[i] if 0 <= i < len(self.months) else None
+        return self._frames[i] if 0 <= i < len(self.months) else None
 
     def snowy(self, month: str) -> np.ndarray | None:
         i = self.index(month)
@@ -255,6 +262,40 @@ class SeasonalModel:
         return _ndvi(observation) - expected < -self.sigmas * sigma
 
 
+class Probability(Protocol):
+    """A trained model: P(change) per pixel (y, x) between two images (band, y, x), NaN
+    where either is missing. `siamese.Predictor` is one."""
+
+    version: str
+
+    def __call__(self, before: np.ndarray, after: np.ndarray) -> np.ndarray: ...
+
+
+@dataclass(frozen=True)
+class Learned(_Anniversary):
+    """A trained model's verdict against the same month a year earlier (Phase 8).
+
+    `detect` asks about the same reference and pass once per event it checks there, and a
+    model costs ~50 ms a time, so verdicts are kept for the arrays they were given (by
+    identity, while both are alive)."""
+
+    probability: Probability
+    threshold: float
+    _verdicts: OrderedDict = field(default_factory=OrderedDict, compare=False, repr=False)
+
+    def changed(self, reference: np.ndarray, observation: np.ndarray) -> np.ndarray:
+        key = (id(reference), id(observation))
+        kept = self._verdicts.get(key)
+        if kept and kept[0]() is reference and kept[1]() is observation:
+            self._verdicts.move_to_end(key)
+            return kept[2]
+        verdict = self.probability(reference, observation) > self.threshold
+        self._verdicts[key] = (weakref.ref(reference), weakref.ref(observation), verdict)
+        if len(self._verdicts) > KEPT_VERDICTS:
+            self._verdicts.popitem(last=False)
+        return verdict
+
+
 @dataclass(frozen=True)
 class AnyOf:
     """Changed where any detector says so."""
@@ -295,7 +336,9 @@ class Method:
     rules: bool
 
 
-def methods(cfg: DetectionConfig) -> dict[str, Method]:
+def methods(cfg: DetectionConfig, buildings: Learned | None = None) -> dict[str, Method]:
+    """The detection methods. With a building model (the promoted champion, or a candidate
+    being scored), it is a method of its own, "unet", and one of production's detectors."""
     naive = NdviDrop(cfg.ndvi_drop)
     cva = Cva(cfg.cva_magnitude)
     seasonal = SeasonalModel(
@@ -305,18 +348,38 @@ def methods(cfg: DetectionConfig) -> dict[str, Method]:
         cfg.seasonal_sigmas,
         cfg.seasonal_min_sigma,
     )
-    return {
+    found = {
         "naive": Method("naive", naive, rules=False),
         "cva": Method("cva", cva, rules=False),
         "bfast": Method("bfast", seasonal, rules=False),
-        PRODUCTION: Method(PRODUCTION, AnyOf((naive, cva, seasonal)), rules=True),
     }
+    detectors: tuple[Detector, ...] = (naive, cva, seasonal)
+    if buildings is not None:
+        found["unet"] = Method("unet", buildings, rules=False)
+        detectors += (buildings,)
+    return found | {PRODUCTION: Method(PRODUCTION, AnyOf(detectors), rules=True)}
+
+
+def _model(method: Method) -> Learned | None:
+    detectors = method.detector.detectors if isinstance(method.detector, AnyOf) else ()
+    return next((d for d in (method.detector, *detectors) if isinstance(d, Learned)), None)
+
+
+def thresholds(method: Method, cfg: DetectionConfig) -> dict:
+    """The thresholds in force for a method, recorded on every event."""
+    model = _model(method)
+    return cfg.model_dump() | ({"buildings_threshold": model.threshold} if model else {})
 
 
 def version(method: Method, cfg: DetectionConfig) -> str:
-    """Changes whenever the method, its rules or any threshold does; on every event."""
-    text = json.dumps([method.name, RULES_REVISION, cfg.model_dump()], sort_keys=True)
-    return f"{method.name}-{hashlib.sha256(text.encode()).hexdigest()[:8]}"
+    """Changes whenever the method, its rules, any threshold or its model does; on every
+    event. A model's version is spelt out: `production-1a2b3c4d+orbitdiff_buildings/3`."""
+    model = _model(method)
+    parts = [method.name, RULES_REVISION, thresholds(method, cfg)]
+    if model:  # without one, the same version as before models existed
+        parts.append(model.probability.version)
+    digest = hashlib.sha256(json.dumps(parts, sort_keys=True).encode()).hexdigest()[:8]
+    return f"{method.name}-{digest}" + (f"+{model.probability.version}" if model else "")
 
 
 # From pixels to events
@@ -542,7 +605,7 @@ def detect(
         reference = refs.get(month, month)
         if reference is None:
             continue
-        changed = method.detector.changed(reference, stack.values[i]) & (claimed_until < i)
+        changed = method.detector.changed(reference, stack.at(month)) & (claimed_until < i)
         for pixels in change_regions(changed, grid, cfg.min_mapping_unit_ha):
             if method.rules:
                 seen = _first_showing(month, pixels, passes, refs, method.detector, cfg)
@@ -551,7 +614,7 @@ def detect(
             else:
                 seen = _first_clear(month, pixels, passes, cfg)
             before_month = shift_month(month, -YEAR)
-            b, a = _median(stack.at(before_month), pixels), _median(stack.values[i], pixels)
+            b, a = _median(stack.at(before_month), pixels), _median(stack.at(month), pixels)
             event = Event(
                 method=method.name,
                 month=month,

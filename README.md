@@ -93,7 +93,7 @@ polygon → STAC search → windowed COG reads → cloud masking → monthly com
 | 5. Web app: draw an AOI, browse the archive | done |
 | 6. Evaluation harness and naive baseline (labels still to verify) | done |
 | 7. Classical detectors, events and statuses (thresholds provisional) | done |
-| 8. U-Net for buildings | next |
+| 8. U-Net for buildings (promotion waits for verified labels) | in progress |
 | 9. Accounts, alert rules, alert emails, feedback | done |
 | 10. Monitoring: admin view of precision and pipeline health | done |
 | 11. Docker Compose stack (local); deployment | in progress |
@@ -201,6 +201,17 @@ verified areas. Admins label them in the app (see `eval/README.md`):
 
 ```bash
 uv run orbitdiff evaluate --method naive --fetch
+```
+
+The building model (a Siamese U-Net) trains on OSCD, on CPU, and is registered in MLflow.
+It runs in production only once `promote` has checked it on the evaluation set: it must
+not raise false alerts, not lose recall, and beat the naive baseline. Without a verified
+evaluation set, `promote` refuses.
+
+```bash
+uv run --group ml orbitdiff train-buildings          # downloads OSCD (513 MB) once, into data/
+uv run --group ml orbitdiff evaluate --model-version 1
+uv run --group ml orbitdiff promote --version 1      # then restart the worker
 ```
 
 Tests run offline. Rasters are small synthetic GeoTIFFs with staged changes, and sockets

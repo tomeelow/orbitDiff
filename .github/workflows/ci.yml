@@ -40,7 +40,7 @@ jobs:
           enable-cache: true
 
       - name: Install
-        run: uv sync --locked
+        run: uv sync --locked --group ml   # the building model's tests need PyTorch (CPU)
 
       - name: Lint
         run: uv run ruff check .
@@ -49,7 +49,7 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Test
-        run: uv run pytest -rs   # -rs: a skipped database test would show here
+        run: uv run --group ml pytest -rs   # -rs: a skipped test would show here
 
       - name: Compose file is valid
         run: docker compose config --quiet

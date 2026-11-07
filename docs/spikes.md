@@ -228,3 +228,53 @@ passes to outvote one bad pass, moved by 0.002–0.004 in red.
   get through. Comparing each pass with its neighbours in the same AOI would catch that;
   it isn't needed for any AOI so far.
 - A pass with fewer than 100 reference pixels in the AOI keeps its metadata.
+
+## 6. The building model: trained on L1C, served on L2A (2026-11-07)
+
+The building model (Phase 8) trains on OSCD, which is L1C (top-of-atmosphere
+reflectance), and serves on our L2A composites (surface reflectance). Each image is
+standardised per band, over the pixels seen on both dates, before the model sees it.
+`spikes/buildings_skew.py --version 1` compares OSCD's 10 test pairs with Grünheide's
+107 anniversary pairs (area 3, 2017–2026). 15 of those pairs share too few clear pixels
+to compare, and the model skips them too.
+
+**Raw reflectance is far apart.** Median per band, every pixel of both dates:
+
+| Band | OSCD (L1C) | Grünheide (L2A) |
+|---|---|---|
+| blue | 0.139 | 0.032 |
+| green | 0.130 | 0.045 |
+| red | 0.137 | 0.036 |
+| nir | 0.232 | 0.210 |
+
+Part of the gap is the atmosphere: path radiance brightens the visible bands most. Part
+is land cover: OSCD is cities, and Grünheide is mostly pine forest. Either way, a model
+fed raw reflectance would see inputs unlike anything it trained on.
+
+**Standardised, the inputs line up.** This is the spread (standard deviation) of the
+after-minus-before difference the model sees, as the median over pairs:
+
+| Band | OSCD | Grünheide |
+|---|---|---|
+| blue | 0.62 | 0.53 |
+| green | 0.60 | 0.53 |
+| red | 0.57 | 0.53 |
+| nir | 0.65 | 0.70 |
+
+**What the model flags**, at the threshold of 0.5:
+- On OSCD's test cities, 1.95% of unchanged pixels (false positives) and 33.2% of changed
+  ones.
+- On Grünheide, by the year of the later month:
+
+| Year | 2018 | 2019 | 2020 | 2021 | 2022 | 2023 | 2024 | 2025 | 2026 |
+|---|---|---|---|---|---|---|---|---|---|
+| Pixels flagged | 0.5% | 0.8% | 7.3% | 8.8% | 7.0% | 5.6% | 2.1% | 2.4% | 1.9% |
+
+Before construction, the model flags fewer Grünheide pixels than its false-positive rate
+on OSCD, so L2A inputs don't make it see change everywhere. From 2020 to 2023 the Tesla
+factory goes up inside the area: the flags rise about tenfold, then fall back.
+
+All of this is qualitative: no labels say which flagged pixels are right. The model's
+event precision and recall on L2A come from the evaluation set, once it is verified.
+OSCD has one test city with both dates inside the L2A archive (Chongqing, 2017-04 and
+2018-04). Scoring the model there on L1C and on L2A would measure the gap directly.

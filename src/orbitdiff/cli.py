@@ -1,5 +1,5 @@
-"""Command line entry points: `orbitdiff fetch|mask|mask-report|composites|evaluate|worker|
-scheduler|assign-aois`."""
+"""Command line entry points: `orbitdiff fetch|mask|mask-report|composites|evaluate|
+train-buildings|promote|worker|scheduler|assign-aois`."""
 
 import argparse
 import sys
@@ -11,9 +11,9 @@ from loguru import logger
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 
-from orbitdiff import accounts, composites, db, jobs, mask_report, masking
+from orbitdiff import accounts, buildings, composites, db, detection, jobs, mask_report, masking
 from orbitdiff.aoi import load_geometry, make_grid
-from orbitdiff.config import REPO_ROOT, pipeline_config, settings
+from orbitdiff.config import REPO_ROOT, PipelineConfig, pipeline_config, settings
 from orbitdiff.fetch import fetch_aoi
 
 
@@ -53,32 +53,178 @@ def _composites(args: argparse.Namespace) -> None:
     print(composites.update_composites(args.id, pipeline_config(), settings().data_dir))
 
 
+def _mlflow():
+    import mlflow
+
+    mlflow.set_tracking_uri(settings().mlflow_tracking_uri)
+    return mlflow
+
+
+def _building_model(cfg: PipelineConfig, version: int | None) -> detection.Learned | None:
+    """A registered version of the building model if asked for, else the champion, if any."""
+    if version is None:
+        predictor = buildings.load_champion(settings().data_dir)
+    else:
+        from orbitdiff import siamese
+
+        _mlflow()
+        predictor = siamese.from_registry(cfg.buildings.registered_model, version)
+    return predictor and detection.Learned(predictor, cfg.buildings.threshold)
+
+
 def _evaluate(args: argparse.Namespace) -> None:
     from orbitdiff import evaluation
 
     cfg = pipeline_config()
+    model = _building_model(cfg, args.model_version)
+    names = args.method or ["naive", "cva", "bfast", *(["unet"] if model else []), "production"]
     reports, version, verified = evaluation.evaluate(
-        args.method, cfg, settings().data_dir, args.eval_dir, fetch=args.fetch
+        names, cfg, settings().data_dir, args.eval_dir, fetch=args.fetch, buildings=model
     )
     if not reports:
         raise SystemExit(f"No labelled AOIs in {args.eval_dir}: see eval/README.md")
     print(f"Evaluation set {version}" + ("" if verified else " (labels NOT verified)"))
+    if model:
+        print(f"Building model {model.probability.version}")
     print(evaluation.table(reports))
     if args.no_mlflow:
         return
-    import mlflow
-
-    mlflow.set_tracking_uri(settings().mlflow_tracking_uri)
+    mlflow = _mlflow()
     mlflow.set_experiment("evaluation")
     for name, report in reports.items():
         with mlflow.start_run(run_name=name):
             mlflow.log_params(
                 {"method": name, "eval_set": version, "labels_verified": verified}
+                | {"buildings_model": model and model.probability.version}
                 | cfg.detection.model_dump(exclude={"categories"})
                 | {f"category_{k}": v for k, v in cfg.detection.categories.model_dump().items()}
                 | cfg.evaluation.model_dump()
             )
             mlflow.log_metrics(evaluation.metrics(report))
+
+
+def _train_buildings(args: argparse.Namespace) -> None:
+    import torch
+
+    from orbitdiff import oscd, siamese
+
+    cfg = pipeline_config().buildings
+    folder = oscd.download(cfg.oscd, settings().data_dir / "oscd")
+    trained = siamese.train(cfg, folder)
+    test = sum(trained.test.values(), siamese.Scores(0, 0, 0))
+    print(f"Validation ({', '.join(cfg.val_cities)}): F1 {trained.val.f1:.3f}")
+    print(
+        f"OSCD test, {len(trained.test)} cities: F1 {test.f1:.3f} "
+        f"(precision {test.precision:.3f}, recall {test.recall:.3f})"
+    )
+    for name, s in trained.test.items():
+        print(f"  {name:12} F1 {s.f1:.3f}")
+    print(f"Trained in {trained.seconds / 60:.1f} min on CPU; kept step {trained.best_step}")
+    if args.no_mlflow:
+        return
+    mlflow = _mlflow()
+    mlflow.set_experiment("buildings")
+    with mlflow.start_run(run_name="siamese_unet_rgbn") as run:
+        mlflow.log_params(
+            cfg.model_dump(exclude={"oscd", "val_cities"})
+            | {
+                "bands": "B02,B03,B04,B08",
+                "input": "per-image standardised reflectance",
+                "dataset": "OSCD",
+                "dataset_version": oscd.version(cfg.oscd),
+                "train_cities": ",".join(
+                    c for c in oscd.cities(folder, "train") if c not in cfg.val_cities
+                ),
+                "val_cities": ",".join(cfg.val_cities),
+                "test_cities": ",".join(trained.test),
+                "pos_weight": round(trained.pos_weight, 3),
+                "best_step": trained.best_step,
+                "parameters": sum(p.numel() for p in trained.predictor.model.parameters()),
+                "torch": torch.__version__,
+                "device": "cpu",
+            }
+        )
+        for step, loss, f1 in trained.history:
+            mlflow.log_metrics({"train_loss": loss, "val_f1": f1}, step=step)
+        mlflow.log_metrics(
+            {
+                "val_precision": trained.val.precision,
+                "val_recall": trained.val.recall,
+                "oscd_test_precision": test.precision,
+                "oscd_test_recall": test.recall,
+                "oscd_test_f1": test.f1,
+                "train_seconds": trained.seconds,
+            }
+            | {f"oscd_test_f1_{name}": s.f1 for name, s in trained.test.items()}
+        )
+        info = siamese.log_model(trained.predictor, cfg.registered_model)
+    print(
+        f"Registered {cfg.registered_model} version {info.registered_model_version} "
+        f"(run {run.info.run_id}). Not promoted: see `orbitdiff promote`."
+    )
+
+
+def _promote(args: argparse.Namespace) -> None:
+    from orbitdiff import evaluation
+
+    cfg, data_dir = pipeline_config(), settings().data_dir
+    aois, eval_version = evaluation.load_eval_set(args.eval_dir)
+    unverified = sum(not a.verified for a in aois)
+    if not aois or unverified:
+        state = "no labelled areas" if not aois else f"{unverified} unverified areas"
+        raise SystemExit(
+            f"Refusing: promotion needs a verified evaluation set, and {args.eval_dir} has "
+            f"{state}. See eval/README.md."
+        )
+    candidate = _building_model(cfg, args.version)
+    champion = _building_model(cfg, None)
+    before, _, _ = evaluation.evaluate(
+        ["naive", detection.PRODUCTION], cfg, data_dir, args.eval_dir, buildings=champion
+    )
+    after, _, _ = evaluation.evaluate(
+        [detection.PRODUCTION], cfg, data_dir, args.eval_dir, buildings=candidate
+    )
+    rows = {
+        "baseline": before["naive"],
+        "champion": before[detection.PRODUCTION],
+        "candidate": after[detection.PRODUCTION],
+    }
+    names = {
+        "baseline": "naive",
+        "champion": champion.probability.version if champion else "none",
+        "candidate": candidate.probability.version,
+    }
+    print(f"Evaluation set {eval_version}")
+    print(evaluation.table({f"{k}: {names[k]}": v for k, v in rows.items()}))
+    reasons = evaluation.gate(
+        rows["candidate"].overall,
+        rows["champion"].overall,
+        rows["baseline"].overall,
+        cfg.buildings.recall_tolerance,
+    )
+    mlflow = _mlflow()
+    mlflow.set_experiment("promotion")
+    with mlflow.start_run(run_name=f"promote {names['candidate']}"):
+        mlflow.log_params(
+            {f"{k}_model": v for k, v in names.items()}
+            | {"eval_set": eval_version, "promoted": not reasons}
+            | {"recall_tolerance": cfg.buildings.recall_tolerance}
+        )
+        for key, report in rows.items():
+            mlflow.log_metrics({f"{key}_{m}": v for m, v in evaluation.metrics(report).items()})
+    if reasons:
+        raise SystemExit("Not promoted:\n- " + "\n- ".join(reasons))
+
+    from mlflow import MlflowClient
+
+    from orbitdiff import siamese
+
+    client, name = MlflowClient(), cfg.buildings.registered_model
+    siamese.save_weights(candidate.probability, buildings.folder(data_dir) / f"v{args.version}.pt")
+    run_id = client.get_model_version(name, str(args.version)).run_id
+    buildings.write_champion(data_dir, name, args.version, run_id)
+    client.set_registered_model_alias(name, buildings.CHAMPION, str(args.version))
+    print(f"Promoted {names['candidate']}. Restart the worker to run it.")
 
 
 def _worker(args: argparse.Namespace) -> None:
@@ -141,13 +287,27 @@ def main(argv: list[str] | None = None) -> None:
     comp.set_defaults(run=_composites)
 
     ev = sub.add_parser("evaluate", help="score detection methods on the evaluation set")
+    ev.add_argument("--method", nargs="+", help="default: every method, unet with a model")
     ev.add_argument(
-        "--method", nargs="+", default=["naive", "cva", "bfast", "production"], help="methods"
+        "--model-version", type=int, help="building model version (default: the champion)"
     )
     ev.add_argument("--eval-dir", type=Path, default=REPO_ROOT / "eval")
     ev.add_argument("--fetch", action="store_true", help="read and composite missing imagery")
     ev.add_argument("--no-mlflow", action="store_true", help="print only, log nothing")
     ev.set_defaults(run=_evaluate)
+
+    tb = sub.add_parser(
+        "train-buildings", help="train the building model on OSCD and register it (ml group)"
+    )
+    tb.add_argument("--no-mlflow", action="store_true", help="print only, register nothing")
+    tb.set_defaults(run=_train_buildings)
+
+    pr = sub.add_parser(
+        "promote", help="make a building model the champion, if it passes the gate (ml group)"
+    )
+    pr.add_argument("--version", type=int, required=True, help="registered model version")
+    pr.add_argument("--eval-dir", type=Path, default=REPO_ROOT / "eval")
+    pr.set_defaults(run=_promote)
 
     worker = sub.add_parser("worker", help="run queued backfills (needs the ml group)")
     worker.set_defaults(run=_worker)

@@ -18,8 +18,8 @@ from pydantic import BaseModel
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
-from orbitdiff import db, detection
-from orbitdiff.config import PipelineConfig
+from orbitdiff import buildings, db, detection
+from orbitdiff.config import PipelineConfig, settings
 
 STUCK_AFTER = timedelta(hours=1)  # a claim this old never finished: its email may be lost
 
@@ -170,7 +170,9 @@ def summary(s: Session, cfg: PipelineConfig, now: datetime) -> Summary:
         .order_by(db.JobRun.finished_utc.desc())
         .limit(m.failures_shown)
     ).all()
-    method = detection.methods(cfg.detection)[detection.PRODUCTION]
+    champion = buildings.champion_named(settings().data_dir)
+    model = champion and detection.Learned(champion, cfg.buildings.threshold)
+    method = detection.methods(cfg.detection, model)[detection.PRODUCTION]
     return Summary(
         production_version=detection.version(method, cfg.detection),
         precision_days=m.precision_days,

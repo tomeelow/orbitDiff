@@ -136,6 +136,24 @@ class EvaluationConfig(_Section):
     months_after: int = Field(ge=0)
 
 
+class OscdConfig(_Section):
+    url: str  # the dataset's mirror at a pinned commit
+    files: dict[str, str]  # zip file name -> SHA-256
+
+
+class BuildingsConfig(_Section):
+    registered_model: str
+    threshold: float = Field(gt=0, lt=1)
+    recall_tolerance: float = Field(ge=0, le=1)
+    seed: int
+    val_cities: tuple[str, ...]
+    patch_px: int = Field(ge=32, multiple_of=16)
+    batch: int = Field(ge=1)
+    steps: int = Field(ge=1)
+    learning_rate: float = Field(gt=0)
+    oscd: OscdConfig
+
+
 class JobsConfig(_Section):
     backfill_timeout_hours: float = Field(gt=0)
 
@@ -155,6 +173,7 @@ class PipelineConfig(_Section):
     monitoring: MonitoringConfig
     accounts: AccountsConfig
     evaluation: EvaluationConfig
+    buildings: BuildingsConfig
     jobs: JobsConfig
     schedule: ScheduleConfig
 

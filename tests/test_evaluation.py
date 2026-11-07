@@ -14,8 +14,11 @@ from orbitdiff.evaluation import (
     AoiRun,
     EvalAoi,
     Label,
+    Scores,
     alerts_from,
     dump_aoi,
+    f1,
+    gate,
     load_eval_set,
     metrics,
     parse_aoi,
@@ -193,3 +196,48 @@ def test_production_alerts_follow_the_rule_in_the_status_they_had_then():
     assert [a.alerted for a in when_pending] == [np.datetime64("2021-05-05")] * 2
     assert [a.alerted for a in when_confirmed] == [np.datetime64("2021-05-20")]
     assert len(alerts_from(events)) == 4  # a bare detector: everything, when detected
+
+
+def scores(alerts: int, true_alerts: int, labels: int, found: int, aoi_years: float = 10):
+    return Scores(alerts, true_alerts, labels, found, aoi_years)
+
+
+CHAMPION = scores(alerts=20, true_alerts=10, labels=20, found=10)  # 1.0 false alerts / AOI-yr
+BASELINE = scores(alerts=10, true_alerts=4, labels=20, found=4)  # F1 0.27
+
+
+def test_a_candidate_that_finds_more_without_more_false_alerts_is_promoted():
+    candidate = scores(alerts=22, true_alerts=12, labels=20, found=12)
+    assert gate(candidate, CHAMPION, BASELINE, recall_tolerance=0.02) == []
+
+
+@pytest.mark.parametrize(
+    ("candidate", "reason"),
+    [
+        (scores(25, 14, 20, 14), "false alerts per AOI-year rise from 1.00 to 1.10"),
+        (scores(15, 9, 20, 9), "event recall falls from 0.50 to 0.45"),
+        (scores(4, 1, 20, 1), "doesn't beat the naive baseline"),
+    ],
+)
+def test_the_gate_refuses_a_candidate_with_the_reason(candidate, reason):
+    reasons = gate(candidate, CHAMPION, BASELINE, recall_tolerance=0.02)
+    assert any(reason in r for r in reasons), reasons
+
+
+def test_the_gate_allows_a_recall_loss_within_the_tolerance():
+    champion = scores(alerts=20, true_alerts=10, labels=100, found=50)
+    candidate = scores(alerts=19, true_alerts=10, labels=100, found=49)  # recall 0.50 -> 0.49
+    assert gate(candidate, champion, BASELINE, recall_tolerance=0.02) == []
+
+
+def test_the_gate_refuses_what_the_evaluation_set_cant_score():
+    empty = Scores()  # no labelled changes, no AOI-years
+    assert gate(empty, empty, empty, 0.02) == [
+        "the evaluation set can't score it: it needs AOI-years and labelled changes"
+    ]
+
+
+def test_f1_is_zero_with_labels_and_no_alerts_and_unknown_without_labels():
+    assert f1(scores(0, 0, 10, 0)) == 0.0
+    assert f1(Scores()) is None
+    assert f1(scores(10, 5, 10, 5)) == pytest.approx(0.5)

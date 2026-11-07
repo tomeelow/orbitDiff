@@ -1,6 +1,9 @@
 """Detection on small synthetic landscapes with staged changes, as in the mockup: forest,
 fields and water, a clearing, a building, floods, slivers, specks and cloud gaps."""
 
+import hashlib
+import json
+
 import numpy as np
 import pytest
 
@@ -8,6 +11,8 @@ from orbitdiff.config import pipeline_config
 from orbitdiff.detection import (
     PIXEL_HA,
     PRODUCTION,
+    RULES_REVISION,
+    Learned,
     Observation,
     Stack,
     categorize,
@@ -15,6 +20,7 @@ from orbitdiff.detection import (
     detect,
     methods,
     shift_month,
+    thresholds,
     version,
 )
 
@@ -77,8 +83,12 @@ def looks(grid, where, bands, elsewhere=FOREST) -> np.ndarray:
 
 
 def run(grid, cfg, values, method="naive", show=None, snow=None):
+    return run_with(grid, cfg, values, methods(cfg)[method], show, snow)
+
+
+def run_with(grid, cfg, values, method, show=None, snow=None):
     stack = Stack(MONTHS, values, snow)
-    return detect(stack, FakePasses(stack, show), grid, methods(cfg)[method], cfg)
+    return detect(stack, FakePasses(stack, show), grid, method, cfg)
 
 
 # Without rules: what each detector sees
@@ -270,6 +280,74 @@ def test_snow_is_seasonal_and_hides_a_clearing_only_until_it_melts(grid, cfg):
         "vegetation_loss",
         "confirmed",
     )
+
+
+class RoofModel:
+    """A stand-in for a trained building model: P(change) 0.9 where the visible bands
+    brightened by more than 0.05, 0.1 elsewhere, NaN where either image is missing."""
+
+    def __init__(self, version: str = "orbitdiff_buildings/3"):
+        self.version = version
+
+    def __call__(self, before, after):
+        brighter = (after[:3] - before[:3]).mean(axis=0) > 0.05
+        missing = np.isnan(before[0]) | np.isnan(after[0])
+        return np.where(missing, np.nan, np.where(brighter, 0.9, 0.1))
+
+
+def test_a_building_model_finds_roofs_through_the_same_mapping_unit(grid, cfg):
+    values = landscape(grid, base=FIELD)
+    stage(values, CLEARING, ROOFS, "2021-05")
+    values[MONTHS.index("2021-05") :, :, 60:62, 10:60] = ROOFS[:, None, None]  # a 2 px sliver
+    values[MONTHS.index("2021-08") :, :, 90:93, 90:93] = ROOFS[:, None, None]  # one roof, 0.09 ha
+    model = Learned(RoofModel(), threshold=0.5)
+
+    (e,) = run_with(grid, cfg, values, methods(cfg, model)["unet"])
+
+    assert (e.month, e.reference_month) == ("2021-05", "2020-05")
+    assert e.area_ha == pytest.approx(20 * 20 * PIXEL_HA)
+
+
+def test_a_learned_detector_asks_its_model_once_per_pair_of_images(grid):
+    calls = []
+
+    class Counting(RoofModel):
+        def __call__(self, before, after):
+            calls.append(1)
+            return super().__call__(before, after)
+
+    detector = Learned(Counting(), threshold=0.5)
+    stack = Stack(MONTHS, landscape(grid))
+    before, after = stack.at("2020-05"), stack.at("2021-05")
+    assert before is stack.at("2020-05")  # one view per month, every time
+
+    first = detector.changed(before, after)
+    np.testing.assert_array_equal(detector.changed(before, after), first)
+    assert len(calls) == 1
+    detector.changed(before.copy(), after)  # same values, another array: asked again
+    assert len(calls) == 2
+
+
+def test_without_a_building_model_every_version_is_what_it_was(cfg):
+    plain = methods(cfg)
+    assert "unet" not in plain
+    text = json.dumps([PRODUCTION, RULES_REVISION, cfg.model_dump()], sort_keys=True)
+    digest = hashlib.sha256(text.encode()).hexdigest()[:8]
+    assert version(plain[PRODUCTION], cfg) == f"production-{digest}"
+    assert thresholds(plain[PRODUCTION], cfg) == cfg.model_dump()
+
+
+def test_a_building_model_is_named_in_the_version_and_its_threshold_recorded(cfg):
+    with_model = methods(cfg, Learned(RoofModel(), 0.5))[PRODUCTION]
+    newer = methods(cfg, Learned(RoofModel("orbitdiff_buildings/4"), 0.5))[PRODUCTION]
+    stricter = methods(cfg, Learned(RoofModel(), 0.7))[PRODUCTION]
+
+    v = version(with_model, cfg)
+    assert v.startswith("production-") and v.endswith("+orbitdiff_buildings/3")
+    assert len(v) <= 48  # events.method_version
+    assert len({v, version(newer, cfg), version(stricter, cfg)}) == 3
+    assert v != version(methods(cfg)[PRODUCTION], cfg)
+    assert thresholds(with_model, cfg) == cfg.model_dump() | {"buildings_threshold": 0.5}
 
 
 def test_the_version_changes_with_any_threshold(cfg):

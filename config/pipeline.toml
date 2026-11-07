@@ -96,6 +96,26 @@ min_overlap = 0.25                # intersection, as a share of the smaller foot
 months_before = 1                 # a detection may come this many months before the labelled month
 months_after = 12                 # ...or this many after
 
+[buildings]                       # the learned building detector (Phase 8): a Siamese U-Net
+registered_model = "orbitdiff_buildings"
+threshold = 0.5                   # change probability above which a pixel changed. PROVISIONAL
+recall_tolerance = 0.02           # promotion: event recall a candidate may lose against the champion
+# Training on OSCD: its official split by city, with validation cities out of its train cities.
+seed = 7
+val_cities = ["nantes", "hongkong", "aguasclaras"]  # Europe, Asia, South America
+patch_px = 96                     # square training crops, 960 m
+batch = 16
+steps = 3000                      # optimiser steps
+learning_rate = 1e-3
+
+[buildings.oscd]                  # as TorchGeo pins it: a mirror at a fixed commit, checked by SHA-256
+url = "https://hf.co/datasets/hkristen/oscd/resolve/4958d786c1389ede1511d91a6ecf1a75c4074933/"
+
+[buildings.oscd.files]
+"Onera Satellite Change Detection dataset - Images.zip" = "940b87887511058a933e67cd6d0e43e2eb825a55d8e79a50983dee7f23003656"
+"Onera Satellite Change Detection dataset - Train Labels.zip" = "89fb54cd12ad0dbea6c447528139dec305b865294215434bf6dd170fb8fd3ca5"
+"Onera Satellite Change Detection dataset - Test Labels.zip" = "2e195eaa1b788b99fa93ea8073e3780bc0b763000b0c49dbf70548acf1e5d67d"
+
 [jobs]
 backfill_timeout_hours = 4         # a ten-year backfill reads ~1,400 passes
 
