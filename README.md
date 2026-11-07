@@ -96,7 +96,8 @@ polygon → STAC search → windowed COG reads → cloud masking → monthly com
 | 8. U-Net for buildings | next |
 | 9. Accounts, alert rules, alert emails, feedback | done |
 | 10. Monitoring: admin view of precision and pipeline health | done |
-| 11–12. Deployment, documentation | planned |
+| 11. Docker Compose stack (local); deployment | in progress |
+| 12. Documentation | planned |
 
 `mockup/orbit-diff.html` is an early sketch of the UI (synthetic imagery and events), not its final design.
 
@@ -112,18 +113,37 @@ polygon → STAC search → windowed COG reads → cloud masking → monthly com
 
 ## Running it locally
 
-Requires [uv](https://docs.astral.sh/uv/) and Docker. No API keys are needed: Earth Search
-is open, and Planetary Computer issues an anonymous token. The one secret is a signing key
-for the links in alert emails, which you generate yourself:
+No API keys are needed: Earth Search is open, and Planetary Computer issues an anonymous
+token. The one secret is a signing key for the links in alert emails, which you generate
+yourself:
 
 ```bash
-uv sync --group ml                 # ml: the cloud model, needed by mask and worker
-docker compose up -d               # Postgres+PostGIS (5433), Redis, Mailpit, TiTiler (8001)
-uv run alembic upgrade head
 cp .env.example .env               # then set ORBITDIFF_SIGNING_KEY (see the comment there)
 ```
 
-Run the API, a worker for backfills, and the web app (Node 22.12+ and pnpm):
+### The whole stack in Docker
+
+```bash
+docker compose up --build          # http://localhost:8080
+```
+
+That brings up Postgres+PostGIS, Redis, Mailpit, TiTiler, the API (8000), a worker, the
+scheduler and the web app, and migrates the database first. The worker image carries
+PyTorch for the cloud model, so its first build takes a while. Cubes, composites and the
+model live in `./data`, shared with the development setup below.
+
+### For development
+
+Requires [uv](https://docs.astral.sh/uv/), Node 22.12+ and pnpm. Start only the
+infrastructure in Docker:
+
+```bash
+uv sync --group ml                 # ml: the cloud model, needed by mask and worker
+docker compose up -d db redis mailpit titiler   # Postgres (5433), Redis, Mailpit, TiTiler (8001)
+uv run alembic upgrade head
+```
+
+Run the API, a worker for backfills, and the web app:
 
 ```bash
 uv run uvicorn orbitdiff.api:app   # http://localhost:8000/docs

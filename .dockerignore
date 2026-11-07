@@ -1,0 +1,15 @@
+# Never in an image: secrets, imagery, local state. The Dockerfile copies only what it needs.
+.env
+.env.*
+.git
+.venv
+data
+mlruns
+mlartifacts
+mlflow.db
+**/__pycache__
+.pytest_cache
+.ruff_cache
+.claude
+mockup
+web

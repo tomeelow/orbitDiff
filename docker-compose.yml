@@ -1,10 +1,65 @@
-# Local infrastructure. Application services (api, worker, scheduler, web) are
-# added in the phase that builds them; see docs/implementation_plan.md, Phase 11.
+# The whole stack, locally: `docker compose up --build`, then http://localhost:8080.
+# For development with hot reload, start only the infrastructure
+# (`docker compose up -d db redis mailpit titiler`) and run the app with uv and pnpm.
 #
-# Object storage is not here: in development the AOI cubes and composites go to a local
-# directory, and only deployments point at S3-compatible storage.
+# The app services share ./data (cubes, composites, the cloud model) and the database with
+# development, so either way sees the same areas. Object storage is not here: only
+# deployments point at S3-compatible storage. Email goes to Mailpit and nowhere else.
+
+x-app: &app
+  build: .
+  image: orbitdiff-app
+  restart: unless-stopped
+  environment:
+    ORBITDIFF_DATABASE_URL: postgresql+psycopg://orbitdiff:orbitdiff@db:5432/orbitdiff
+    ORBITDIFF_REDIS_URL: redis://redis:6379/0
+    ORBITDIFF_SMTP_HOST: mailpit
+    ORBITDIFF_WEB_URL: http://localhost:8080          # as the browser reaches them
+    ORBITDIFF_API_URL: http://localhost:8000
+    ORBITDIFF_CORS_ORIGINS: '["http://localhost:8080"]'
+    ORBITDIFF_SIGNING_KEY: ${ORBITDIFF_SIGNING_KEY:?set it in .env; see .env.example}
+    ORBITDIFF_ADMIN_EMAILS: ${ORBITDIFF_ADMIN_EMAILS:-[]}
+  volumes: [./data:/app/data]
+  depends_on:
+    migrate: { condition: service_completed_successfully }
+    redis: { condition: service_started }
+    mailpit: { condition: service_started }
 
 services:
+  migrate:                           # brings the schema up to date, then exits
+    <<: *app
+    command: alembic upgrade head
+    restart: "no"
+    depends_on:
+      db: { condition: service_healthy }
+
+  api:
+    <<: *app
+    command: uvicorn orbitdiff.api:app --host 0.0.0.0 --port 8000
+    ports: ["8000:8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      retries: 5
+
+  worker:                            # backfills and alert emails
+    <<: *app
+    build: { context: ., args: { SYNC_ARGS: --group ml } }
+    image: orbitdiff-worker
+    command: orbitdiff worker
+
+  scheduler:                         # queues an update for every watched area
+    <<: *app
+    command: orbitdiff scheduler
+
+  web:
+    build:
+      context: ./web
+      args: { VITE_API_URL: "http://localhost:8000" }
+    restart: unless-stopped
+    ports: ["8080:80"]
+    depends_on: [api, titiler]
+
   db:
     image: postgis/postgis:17-3.7
     platform: linux/amd64            # the image is amd64-only; Apple Silicon runs it emulated

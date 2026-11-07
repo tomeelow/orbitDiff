@@ -53,6 +53,8 @@ jobs:
 
       - name: Compose file is valid
         run: docker compose config --quiet
+        env:
+          ORBITDIFF_SIGNING_KEY: not-a-secret-only-for-the-config-check
 
   web:
     runs-on: ubuntu-latest
@@ -83,3 +85,19 @@ jobs:
 
       - name: Build
         run: pnpm exec vite build
+
+  images:
+    # The API and web images build. The worker image is the same Dockerfile plus the ml
+    # group (PyTorch, several GB), so it's left to local builds.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ORBITDIFF_SIGNING_KEY: not-a-secret-only-for-the-build
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build
+        run: docker compose build api web
+
+      - name: The API imports in its image
+        run: docker run --rm orbitdiff-app python -c "import orbitdiff.api"
