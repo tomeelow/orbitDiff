@@ -53,6 +53,8 @@ class ReadingConfig(_Section):
     max_tile_cloud_pct: float = Field(gt=0, le=100)
     fetch_min_clear_frac: float = Field(ge=0, le=1)
     workers: int = Field(ge=1)
+    retry_rounds: int = Field(ge=0)
+    retry_wait_s: float = Field(ge=0)
 
 
 class MaskingConfig(_Section):
