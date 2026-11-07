@@ -74,6 +74,13 @@ dark_nir = 0.15                   # and NIR below this: solar or industry
 
 [alerts]
 default_min_ha = 0.5              # the "smallest change" a new alert rule starts with (mockup)
+max_min_ha = 5.0                  # top of that slider; its floor is detection.min_mapping_unit_ha
+send_attempts = 3                 # tries per email before it is given up and logged
+feedback_link_days = 90           # how long an email's "Not a real change" link works
+
+[accounts]
+login_link_minutes = 15           # a sign-in link works this long, any number of times
+session_days = 30                 # signed in on a device for this long
 
 [evaluation]                      # matching detections to labelled events (eval/)
 min_overlap = 0.25                # intersection, as a share of the smaller footprint

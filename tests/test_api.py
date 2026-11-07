@@ -17,9 +17,9 @@ from alembic.migration import MigrationContext
 from fastapi.testclient import TestClient
 from rasterio.io import MemoryFile
 from shapely.geometry import box, mapping
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, func, select, text
 
-from orbitdiff import api, catalog, db, detection, jobs
+from orbitdiff import accounts, api, catalog, db, detection, jobs, mail
 from orbitdiff.aoi import make_grid
 from orbitdiff.config import REPO_ROOT, pipeline_config, settings
 
@@ -44,10 +44,11 @@ def migrated():
 def data_dir(migrated, tmp_path, monkeypatch):
     monkeypatch.setenv("ORBITDIFF_DATABASE_URL", TEST_DB)
     monkeypatch.setenv("ORBITDIFF_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ORBITDIFF_SIGNING_KEY", "test-only-signing-key")
     settings.cache_clear()
     db.engine.cache_clear()
     with migrated.begin() as c:
-        c.execute(text("TRUNCATE aois RESTART IDENTITY CASCADE"))
+        c.execute(text("TRUNCATE users, aois, login_links RESTART IDENTITY CASCADE"))
     yield tmp_path
     db.engine().dispose()
     db.engine.cache_clear()
@@ -65,12 +66,30 @@ class FakeRedis:
 
 
 @pytest.fixture
-def client(data_dir):
+def outbox(monkeypatch) -> list:
+    """Every email sent, instead of sending it."""
+    sent: list = []
+    monkeypatch.setattr(mail, "send", sent.append)
+    return sent
+
+
+def sign_in(client, email: str) -> None:
+    """The way a person signs in: the link from the email, opened."""
+    with db.session() as s:
+        token = accounts.new_login_link(s, email, pipeline_config().accounts)
+    r = client.get("/auth/callback", params={"token": token}, follow_redirects=False)
+    assert r.status_code == 303 and accounts.COOKIE in r.cookies
+
+
+@pytest.fixture
+def client(data_dir, outbox):
     queued: list[int] = []
     api.app.dependency_overrides[api.get_enqueue] = lambda: queued.append
     api.app.dependency_overrides[api.get_redis] = FakeRedis
     with TestClient(api.app) as c:
         c.queued = queued
+        c.outbox = outbox
+        sign_in(c, "owner@example.com")
         yield c
     api.app.dependency_overrides.clear()
 
@@ -273,7 +292,8 @@ def test_events_are_reconciled_never_duplicated_or_deleted(client, aoi_polygon, 
     (third,) = sync()
     assert (third["id"], third["status"]) == (first["id"], "dismissed")
     assert third["history"][-1]["cause"] == "no longer detected"
-    assert (third["alerts"], third["alert_reason"]) == (False, "dismissed")
+    # It alerted while pending, before anything dismissed it: that false alarm still counts.
+    assert (third["alerts"], third["alert_reason"]) == (True, "alert")
 
 
 def test_a_recomputed_event_keeps_its_own_row_not_a_stale_neighbour(
@@ -321,3 +341,266 @@ def test_a_recomputed_event_keeps_its_own_row_not_a_stale_neighbour(
     assert set(events) == {stale, own}
     assert (events[own]["status"], events[own]["area_ha"]) == ("pending", 2.2)
     assert events[stale]["status"] == "dismissed"
+
+
+def test_sign_in_by_emailed_link(data_dir, outbox):
+    with TestClient(api.app) as c:
+        assert c.get("/auth/me").status_code == 401
+        assert c.post("/auth/login", json={"email": "not an address"}).status_code == 422
+        assert c.post("/auth/login", json={"email": " Me@Example.com "}).status_code == 202
+        (message,) = outbox
+        assert message["To"] == "me@example.com"
+        link = next(w for w in message.get_content().split() if "/auth/callback?token=" in w)
+        r = c.get(urlsplit(link)._replace(scheme="", netloc="").geturl(), follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"] == settings().web_url
+        cookie = r.headers["set-cookie"].lower()
+        assert "httponly" in cookie and "samesite=lax" in cookie
+        assert c.get("/auth/me").json() == {"email": "me@example.com"}
+
+        assert c.post("/auth/logout").status_code == 204
+        assert c.get("/auth/me").status_code == 401
+        assert c.get("/auth/callback", params={"token": "made-up"}).status_code == 400
+
+
+def test_an_aoi_is_only_ever_seen_by_its_owner(client, aoi_polygon):
+    aoi_id = create(client, aoi_polygon).json()["id"]
+    paths = [
+        f"/aois/{aoi_id}",
+        f"/aois/{aoi_id}/progress",
+        f"/aois/{aoi_id}/timeline",
+        f"/aois/{aoi_id}/ndvi",
+        f"/aois/{aoi_id}/scenes?month=2021-09",
+        f"/aois/{aoi_id}/events",
+        f"/aois/{aoi_id}/alert-rule",
+    ]
+    assert all(client.get(p).status_code == 200 for p in paths)
+
+    client.cookies.clear()
+    assert all(client.get(p).status_code == 401 for p in paths)
+    assert client.get("/aois").status_code == 401
+
+    sign_in(client, "someone-else@example.com")
+    assert client.get("/aois").json() == []
+    assert all(client.get(p).status_code == 404 for p in paths)  # not 403: ids reveal nothing
+    assert client.post(f"/aois/{aoi_id}/backfill").status_code == 404
+
+
+def test_assign_aois_gives_ownerless_aois_an_owner(client, aoi_polygon, capsys):
+    from orbitdiff import cli
+
+    aoi_id = create(client, aoi_polygon).json()["id"]
+    with db.session() as s:
+        s.get(db.Aoi, aoi_id).user_id = None  # drawn before accounts existed
+    assert client.get("/aois").json() == []
+    cli.main(["assign-aois", "--email", "Owner@Example.com"])
+    assert [a["id"] for a in client.get("/aois").json()] == [aoi_id]
+
+
+def make_event(grid, rows: slice, month: str, *statuses: tuple[str, str, str]) -> detection.Event:
+    """A clearing over `rows`, first seen in `month`, then through `statuses`."""
+    pixels = np.zeros((grid.height, grid.width), bool)
+    pixels[rows, 10:30] = True
+    year, m = month.split("-")
+    first = np.datetime64(statuses[0][2])
+    e = detection.Event(
+        "production",
+        month,
+        f"{int(year) - 1}-{m}",
+        pixels,
+        detection.footprint(pixels, grid),
+        "vegetation_loss",
+        0.82,
+        0.18,
+        first,
+    )
+    for status, cause, at in statuses:
+        e.set(status, cause, np.datetime64(at))
+    return e
+
+
+@pytest.fixture
+def detected(client, aoi_polygon, monkeypatch):
+    """An AOI whose detector finds whatever the test puts in `found`."""
+    aoi_id = create(client, aoi_polygon).json()["id"]
+    grid = make_grid(str(aoi_id), aoi_polygon, max_km2=10)
+    found: list[detection.Event] = []
+    monkeypatch.setattr(detection, "load_stack", lambda *a, **k: None)
+    monkeypatch.setattr(detection, "Passes", lambda *a, **k: None)
+    monkeypatch.setattr(detection, "detect", lambda *a, **k: list(found))
+
+    def sync(*events: detection.Event) -> None:
+        found[:] = events
+        jobs.sync_events(aoi_id, pipeline_config(), settings().data_dir)
+
+    return aoi_id, grid, sync
+
+
+RULE = {
+    "enabled": False,
+    "categories": ["buildings_roads", "vegetation_loss"],
+    "skip_seasonal": True,
+    "min_ha": 0.5,
+}
+
+
+def test_alert_rule_is_checked_saved_and_previewed(client, detected):
+    aoi_id, grid, sync = detected
+    rule = client.get(f"/aois/{aoi_id}/alert-rule").json()
+    assert rule["enabled"] is False and rule["watching_since"] is None
+    assert (rule["min_ha"], rule["min_ha_range"]) == (0.5, [0.1, 5.0])
+    assert rule["categories"] == ["buildings_roads", "vegetation_loss", "solar_industry"]
+
+    for bad in ({"min_ha": 0.05}, {"min_ha": 6}, {"categories": ["clouds"]}):
+        assert client.put(f"/aois/{aoi_id}/alert-rule", json=RULE | bad).status_code == 422
+
+    sync(
+        # 2 ha, confirmed: alerts under the rule.
+        make_event(
+            grid,
+            slice(10, 20),
+            "2021-05",
+            ("pending", "A", "2021-05-05"),
+            ("confirmed", "B", "2021-05-08"),
+        ),
+        # Alerted while pending, then a clear pass didn't see it: a false alarm, counted.
+        make_event(
+            grid,
+            slice(40, 50),
+            "2021-06",
+            ("pending", "C", "2021-06-05"),
+            ("dismissed", "D", "2021-06-09"),
+        ),
+        # 0.4 ha: under the smallest change.
+        make_event(grid, slice(60, 62), "2021-07", ("pending", "E", "2021-07-05")),
+    )
+    preview = client.post(f"/aois/{aoi_id}/alert-rule/preview", json=RULE).json()
+    assert preview == {"changes": 3, "would_alert": 2, "retracted": 1}
+    smaller = RULE | {"min_ha": 0.1}
+    assert (
+        client.post(f"/aois/{aoi_id}/alert-rule/preview", json=smaller).json()["would_alert"] == 3
+    )
+
+    saved = client.put(f"/aois/{aoi_id}/alert-rule", json=RULE | {"enabled": True}).json()
+    assert saved["enabled"] and saved["watching_since"] is not None
+    assert client.get(f"/aois/{aoi_id}").json()["alerts_on"] is True
+    events = client.get(f"/aois/{aoi_id}/events").json()
+    assert [(e["alerts"], e["alert_reason"]) for e in events] == [
+        (False, "under 0.5 ha"),
+        (True, "alert"),
+        (True, "alert"),
+    ]
+    off = client.put(f"/aois/{aoi_id}/alert-rule", json=RULE).json()
+    assert off["enabled"] is False and off["watching_since"] is None
+
+
+def watch_from(aoi_id: int, since: str) -> None:
+    with db.session() as s:
+        s.get(db.AlertRule, aoi_id).watching_since = datetime.fromisoformat(since).replace(
+            tzinfo=UTC
+        )
+
+
+def notifications(aoi_id: int) -> list[tuple[str, str, str, int]]:
+    with db.session() as s:
+        rows = s.scalars(select(db.Notification).order_by(db.Notification.id))
+        return [(n.kind, n.event_status, n.state, n.attempts) for n in rows]
+
+
+def test_an_event_alerts_once_and_follows_up_once(client, detected):
+    from orbitdiff import notify
+
+    aoi_id, grid, sync = detected
+    client.put(f"/aois/{aoi_id}/alert-rule", json=RULE | {"enabled": True})
+    watch_from(aoi_id, "2021-05-01")
+    old = make_event(grid, slice(40, 50), "2021-04", ("pending", "A", "2021-04-10"))
+    seen = ("pending", "S2A_new", "2021-05-05T09:00")
+
+    sync(old, make_event(grid, slice(10, 20), "2021-05", seen))
+    assert notify.notify(aoi_id) == 1  # the April change was in the archive already
+    (alert,) = client.outbox
+    assert alert["Subject"] == "Possible vegetation loss in Kyiv west (2.0 ha)"
+    text_part = alert.get_body(("plain",)).get_content()
+    assert "5 May 2021" in text_part
+    assert "next clear pass confirms or dismisses it" in text_part
+    assert f"/#/areas/{aoi_id}/changes/" in text_part and "/feedback/" in text_part
+    assert notify.notify(aoi_id) == 0  # a retried job sends nothing twice
+
+    confirmed = ("confirmed", "S2B_next", "2021-05-08T09:00")
+    sync(old, make_event(grid, slice(10, 20), "2021-05", seen, confirmed))
+    assert notify.notify(aoi_id) == 1 and notify.notify(aoi_id) == 0
+    assert client.outbox[1]["Subject"] == "Confirmed: vegetation loss in Kyiv west (2.0 ha)"
+
+    sync(old)  # no longer found: dismissed, but the one follow-up has gone out
+    assert notify.notify(aoi_id) == 0
+    assert notifications(aoi_id) == [
+        ("alert", "pending", "sent", 1),
+        ("update", "confirmed", "sent", 1),
+    ]
+
+
+def test_a_failed_send_is_retried_then_given_up(client, detected, monkeypatch):
+    from orbitdiff import notify
+
+    aoi_id, grid, sync = detected
+    client.put(f"/aois/{aoi_id}/alert-rule", json=RULE | {"enabled": True})
+    watch_from(aoi_id, "2021-05-01")
+    sync(make_event(grid, slice(10, 20), "2021-05", ("pending", "S2A_new", "2021-05-05")))
+
+    def down(message):
+        raise ConnectionRefusedError("smtp down")
+
+    monkeypatch.setattr(mail, "send", down)
+    attempts = pipeline_config().alerts.send_attempts
+    for _ in range(attempts + 1):
+        assert notify.notify(aoi_id) == 0
+    assert notifications(aoi_id) == [("alert", "pending", "failed", attempts)]
+
+
+def test_not_a_real_change_from_the_email_and_from_the_app(client, detected):
+    from orbitdiff import notify
+
+    aoi_id, grid, sync = detected
+    client.put(f"/aois/{aoi_id}/alert-rule", json=RULE | {"enabled": True})
+    watch_from(aoi_id, "2021-05-01")
+    sync(make_event(grid, slice(10, 20), "2021-05", ("pending", "S2A_new", "2021-05-05")))
+    notify.notify(aoi_id)
+    text_part = client.outbox[0].get_body(("plain",)).get_content()
+    link = next(w for w in text_part.split() if "/feedback/" in w)
+    path = urlsplit(link).path
+
+    client.cookies.clear()  # the link works without signing in
+    page = client.get(path)
+    assert page.status_code == 200 and 'method="post"' in page.text
+    assert notifications(aoi_id)  # opening the page records nothing
+    with db.session() as s:
+        assert s.scalar(select(func.count()).select_from(db.Feedback)) == 0
+    assert client.post(path).status_code == 200
+    assert client.post(path).status_code == 200  # twice is still once
+    body, _, mac = path.removeprefix("/feedback/").partition(".")
+    assert client.get(f"/feedback/{body}.{mac[::-1]}").status_code == 400  # tampered
+
+    with db.session() as s:
+        (row,) = s.scalars(select(db.Feedback)).all()
+        assert (row.verdict, row.via) == ("not_real", "email")
+        assert row.event["history"][0]["cause"] == "S2A_new" and row.event["method_version"]
+
+    sign_in(client, "owner@example.com")
+    (event,) = client.get(f"/aois/{aoi_id}/events").json()
+    assert event["not_real"] is True
+    r = client.post(f"/aois/{aoi_id}/events/{event['id']}/feedback")
+    assert r.status_code == 204  # already recorded from the email: still one row
+
+
+def test_polling_queues_each_watched_idle_aoi_once(client, aoi_polygon):
+    watched = create(client, aoi_polygon).json()["id"]
+    unwatched = create(client, aoi_polygon).json()["id"]
+    client.put(f"/aois/{watched}/alert-rule", json=RULE | {"enabled": True})
+    queued: list[int] = []
+
+    assert jobs.poll_watched(queued.append) == []  # still on its first backfill
+    with db.session() as s:
+        s.get(db.Aoi, watched).stage = "ready"
+        s.get(db.Aoi, unwatched).stage = "ready"
+    assert jobs.poll_watched(queued.append) == [watched]
+    assert jobs.poll_watched(queued.append) == []  # queued already: not twice
+    assert queued == [watched]

@@ -46,7 +46,14 @@ def test_event_crops_frame_the_footprint_with_context_and_keep_pixels_square(gri
 
     # 24 px (the minimum) around its centre, clipped at the grid edge to 17, scaled x8.
     assert image.shape == (24 * 8, 17 * 8, 4)
-    assert (image[:, : 10 * 8, 3] == 0).all() and (image[:, 10 * 8 :, 3] == 255).all()
+    outline = (image == render.OUTLINE).all(axis=-1)
+    unobserved = np.zeros(image.shape[:2], bool)
+    unobserved[:, : 10 * 8] = True
+    assert (image[unobserved & ~outline, 3] == 0).all()
+    assert (image[~unobserved & ~outline, 3] == 255).all()
+    # The event's rows 50-60 sit at 7-17 in the crop: 56-136 once scaled.
+    rows = np.flatnonzero(outline.any(axis=1))
+    assert 53 <= rows.min() <= 57 and 135 <= rows.max() <= 139
 
 
 def test_composite_tile_urls_are_versioned_and_keep_xyz_placeholders():

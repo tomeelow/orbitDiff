@@ -10,7 +10,7 @@ from functools import cache
 from pathlib import Path
 from typing import Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -110,6 +110,14 @@ class DetectionConfig(_Section):
 
 class AlertsConfig(_Section):
     default_min_ha: float = Field(gt=0)
+    max_min_ha: float = Field(gt=0)
+    send_attempts: int = Field(ge=1)
+    feedback_link_days: int = Field(ge=1)
+
+
+class AccountsConfig(_Section):
+    login_link_minutes: int = Field(ge=1)
+    session_days: int = Field(ge=1)
 
 
 class EvaluationConfig(_Section):
@@ -134,6 +142,7 @@ class PipelineConfig(_Section):
     composites: CompositesConfig
     detection: DetectionConfig
     alerts: AlertsConfig
+    accounts: AccountsConfig
     evaluation: EvaluationConfig
     jobs: JobsConfig
     schedule: ScheduleConfig
@@ -155,6 +164,15 @@ class Settings(BaseSettings):
     titiler_url: str = "http://localhost:8001"  # as the browser reaches it
     titiler_data_dir: str = "/data"  # where TiTiler sees data_dir
     cors_origins: list[str] = ["http://localhost:5173"]  # the web app's dev server
+    # Links in emails point here, as the browser reaches them.
+    web_url: str = "http://localhost:5173"
+    api_url: str = "http://localhost:8000"
+    # Development sends every email to Mailpit; a deployment points this at its provider.
+    smtp_host: str = "localhost"
+    smtp_port: int = 1025
+    mail_from: str = "Orbit Diff <alerts@orbitdiff.localhost>"
+    # Signs the "Not a real change" links in alert emails. A secret: never in git.
+    signing_key: SecretStr | None = None
 
 
 def load_pipeline_config(path: Path) -> PipelineConfig:
