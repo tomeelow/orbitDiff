@@ -82,10 +82,29 @@ class CompositesConfig(_Section):
     fill_max_months: int = Field(ge=0)
 
 
+class CategoryConfig(_Section):
+    water_ndwi: float
+    built_ndvi: float
+    vegetation_ndvi: float
+    bare_ndvi: float
+    dark_visible: float = Field(gt=0)
+    dark_nir: float = Field(gt=0)
+
+
 class DetectionConfig(_Section):
     min_mapping_unit_ha: float = Field(gt=0)
     seasonal_revert_months: int = Field(ge=1)
     confirm_on_next_clear: bool
+    footprint_clear_frac: float = Field(gt=0, le=1)
+    agree_frac: float = Field(gt=0, le=1)
+    ndvi_drop: float = Field(gt=0)
+    categories: CategoryConfig
+
+
+class EvaluationConfig(_Section):
+    min_overlap: float = Field(gt=0, le=1)
+    months_before: int = Field(ge=0)
+    months_after: int = Field(ge=0)
 
 
 class JobsConfig(_Section):
@@ -103,6 +122,7 @@ class PipelineConfig(_Section):
     masking: MaskingConfig
     composites: CompositesConfig
     detection: DetectionConfig
+    evaluation: EvaluationConfig
     jobs: JobsConfig
     schedule: ScheduleConfig
 
@@ -118,6 +138,8 @@ class Settings(BaseSettings):
     # Development defaults match docker-compose.yml; deployments set them in the environment.
     database_url: str = "postgresql+psycopg://orbitdiff:orbitdiff@localhost:5433/orbitdiff"
     redis_url: str = "redis://localhost:6379/0"
+    # Evaluation and training runs (Phase 6 on). A local SQLite store in development.
+    mlflow_tracking_uri: str = f"sqlite:///{REPO_ROOT / 'mlflow.db'}"
     titiler_url: str = "http://localhost:8001"  # as the browser reaches it
     titiler_data_dir: str = "/data"  # where TiTiler sees data_dir
     cors_origins: list[str] = ["http://localhost:5173"]  # the web app's dev server

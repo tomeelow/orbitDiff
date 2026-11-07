@@ -1,4 +1,4 @@
-"""Command line entry points: `orbitdiff fetch|mask|mask-report|composites|worker ...`."""
+"""Command line entry points: `orbitdiff fetch|mask|mask-report|composites|evaluate|worker`."""
 
 import argparse
 import sys
@@ -9,7 +9,7 @@ from loguru import logger
 
 from orbitdiff import composites, jobs, mask_report, masking
 from orbitdiff.aoi import load_geometry, make_grid
-from orbitdiff.config import pipeline_config, settings
+from orbitdiff.config import REPO_ROOT, pipeline_config, settings
 from orbitdiff.fetch import fetch_aoi
 
 
@@ -49,6 +49,32 @@ def _composites(args: argparse.Namespace) -> None:
     print(composites.update_composites(args.id, pipeline_config(), settings().data_dir))
 
 
+def _evaluate(args: argparse.Namespace) -> None:
+    from orbitdiff import evaluation
+
+    cfg = pipeline_config()
+    reports, version, verified = evaluation.evaluate(
+        args.method, cfg, settings().data_dir, args.eval_dir, fetch=args.fetch
+    )
+    print(f"Evaluation set {version}" + ("" if verified else " (labels NOT verified)"))
+    print(evaluation.table(reports))
+    if args.no_mlflow:
+        return
+    import mlflow
+
+    mlflow.set_tracking_uri(settings().mlflow_tracking_uri)
+    mlflow.set_experiment("evaluation")
+    for name, report in reports.items():
+        with mlflow.start_run(run_name=name):
+            mlflow.log_params(
+                {"method": name, "eval_set": version, "labels_verified": verified}
+                | cfg.detection.model_dump(exclude={"categories"})
+                | {f"category_{k}": v for k, v in cfg.detection.categories.model_dump().items()}
+                | cfg.evaluation.model_dump()
+            )
+            mlflow.log_metrics(evaluation.metrics(report))
+
+
 def _worker(args: argparse.Namespace) -> None:
     from redis import Redis
     from rq import Queue, SimpleWorker
@@ -81,6 +107,13 @@ def main(argv: list[str] | None = None) -> None:
     comp = sub.add_parser("composites", help="bring monthly composites up to date")
     comp.add_argument("--id", required=True, help="AOI id")
     comp.set_defaults(run=_composites)
+
+    ev = sub.add_parser("evaluate", help="score detection methods on the evaluation set")
+    ev.add_argument("--method", nargs="+", default=["naive"], help="methods to score")
+    ev.add_argument("--eval-dir", type=Path, default=REPO_ROOT / "eval")
+    ev.add_argument("--fetch", action="store_true", help="read and composite missing imagery")
+    ev.add_argument("--no-mlflow", action="store_true", help="print only, log nothing")
+    ev.set_defaults(run=_evaluate)
 
     worker = sub.add_parser("worker", help="run queued backfills (needs the ml group)")
     worker.set_defaults(run=_worker)

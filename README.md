@@ -73,7 +73,8 @@ polygon → STAC search → windowed COG reads → cloud masking → monthly com
 | 3. Monthly median composites as COGs | done |
 | 4. API, background backfills, map tiles | done |
 | 5. Web app: draw an AOI, browse the archive | done |
-| 6–8. Evaluation set, classical detectors, U-Net for buildings | next |
+| 6. Evaluation harness and naive baseline (labels still to verify) | done |
+| 7–8. Classical detectors and events, U-Net for buildings | next |
 | 9–10. Watching, alerts, feedback, monitoring | planned |
 | 11–12. Deployment, documentation | planned |
 
@@ -81,8 +82,8 @@ polygon → STAC search → windowed COG reads → cloud masking → monthly com
 
 ## Stack
 
-- **Pipeline:** Python 3.12, rasterio, xarray, Zarr, pystac-client, shapely, pyproj;
-  OmniCloudMask in a separate `ml` dependency group.
+- **Pipeline:** Python 3.12, rasterio, xarray, Zarr, SciPy, pystac-client, shapely, pyproj;
+  OmniCloudMask and MLflow in a separate `ml` dependency group.
 - **Backend:** FastAPI, Postgres + PostGIS (SQLAlchemy, GeoAlchemy2, Alembic), RQ on
   Redis for backfill jobs, TiTiler for composite map tiles.
 - **Web app:** Vite, React and TypeScript, MapLibre with Terra Draw, an OpenFreeMap
@@ -151,6 +152,13 @@ uv run pytest
 cd web && pnpm check && pnpm test   # Biome, Vitest
 ```
 
+Detection methods are scored on the evaluation set in `eval/`, which needs labelled,
+verified areas (see `eval/README.md`):
+
+```bash
+uv run orbitdiff evaluate --method naive --fetch
+```
+
 Tests run offline. Rasters are small synthetic GeoTIFFs with staged changes, and sockets
 reach only localhost. The API tests need Postgres: set `ORBITDIFF_TEST_DATABASE_URL` to a
 database on the compose Postgres, otherwise they are skipped. CI runs everything against a
@@ -163,6 +171,7 @@ src/orbitdiff/   pipeline, API and jobs
 web/             the web app
 tests/           unit and end-to-end tests
 config/          pipeline.toml
+eval/            the evaluation set: labelled areas, in git
 migrations/      Alembic migrations
 spikes/          scripts behind the findings in docs/spikes.md
 docs/            implementation plan, ADRs, spike results
