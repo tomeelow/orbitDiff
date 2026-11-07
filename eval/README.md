@@ -35,12 +35,22 @@ is a false alert.
 
 ## Labelling
 
-1. Pick an area, and look through its archive in the web app (swipe A/B, NDVI).
-2. Draw each change's footprint and note the month it first shows.
-3. Verify every event, and confirm that quiet areas really are quiet, against
+Label in the web app, signed in as an admin (`ORBITDIFF_ADMIN_EMAILS`). The API writes
+`eval/<area name>.geojson` in this checkout, in the format above; commit it like any other
+change. With `docker compose`, the API mounts `./eval` for this.
+
+1. Draw the area and let its archive backfill. Name it for its file, e.g. "Grünheide" →
+   `grunheide.geojson`.
+2. Open **Evaluation labels → Label this area**. While labelling, the map shows your labels
+   instead of the detected changes, so the labels don't copy a detector.
+3. Look through the archive (swipe A/B, NDVI). For each change, step B to the first month
+   it shows, press **Draw a change**, outline it on the map, and pick its category. A
+   change in the period's first twelve months can't be scored, and is refused.
+4. Tick what makes the area hard, and save. The file is a candidate.
+5. Verify every event, and confirm that quiet areas really are quiet, against
    high-resolution historical imagery. Use that imagery for checking only, and check its
    terms before using it for anything else.
-4. Fill in `verified_by`, `verified_on` and `verified_with`.
+6. Fill in who verified it, when, and against what, and save again.
 
 Aim for 20–50 areas, events and quiet ones together.
 

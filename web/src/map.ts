@@ -11,7 +11,9 @@ import {
   setWorkerUrl,
 } from "maplibre-gl";
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
-import type { ChangeEvent } from "./api";
+import { TerraDraw, TerraDrawPolygonMode, ValidateNotSelfIntersecting } from "terra-draw";
+import { TerraDrawMapLibreGLAdapter } from "terra-draw-maplibre-gl-adapter";
+import type { ChangeEvent, LabelChange } from "./api";
 import type { Theme } from "./hooks";
 import { CATEGORY } from "./lib/changes";
 import type { Bounds, Polygon } from "./lib/geo";
@@ -221,4 +223,78 @@ export function setChanges(map: MapLibreMap, events: ChangeEvent[], selected: nu
       "od-aoi-casing",
     );
   }
+}
+
+/** Evaluation labels: solid outlines in their category's colour over a light fill. The map
+hides detected changes while labelling, so the two never share it. */
+export function setLabels(map: MapLibreMap, changes: LabelChange[]): void {
+  const data: GeoJSON.FeatureCollection = {
+    type: "FeatureCollection",
+    features: changes.map((change) => ({
+      type: "Feature",
+      geometry: change.geometry,
+      properties: { color: CATEGORY[change.category].color },
+    })),
+  };
+  const source = map.getSource<GeoJSONSource>("od-labels");
+  if (source) {
+    source.setData(data);
+    return;
+  }
+  map.addSource("od-labels", { type: "geojson", data });
+  map.addLayer(
+    {
+      id: "od-labels-fill",
+      type: "fill",
+      source: "od-labels",
+      paint: { "fill-color": ["get", "color"], "fill-opacity": 0.18 },
+    },
+    "od-aoi-casing",
+  );
+  map.addLayer(
+    {
+      id: "od-labels-casing",
+      type: "line",
+      source: "od-labels",
+      paint: { "line-color": MAP_COLORS.shade, "line-width": 4, "line-opacity": 0.55 },
+    },
+    "od-aoi-casing",
+  );
+  map.addLayer(
+    {
+      id: "od-labels-line",
+      type: "line",
+      source: "od-labels",
+      paint: { "line-color": ["get", "color"], "line-width": 2 },
+    },
+    "od-aoi-casing",
+  );
+}
+
+/** Terra Draw on `map`, drawing polygons that may not cross themselves. Stop it to remove it. */
+export function drawPolygons(map: MapLibreMap): TerraDraw {
+  const draw = new TerraDraw({
+    adapter: new TerraDrawMapLibreGLAdapter({ map }),
+    modes: [
+      new TerraDrawPolygonMode({
+        editable: true,
+        validation: (feature) => ValidateNotSelfIntersecting(feature),
+        styles: {
+          fillColor: MAP_COLORS.accent,
+          fillOpacity: 0.12,
+          outlineColor: MAP_COLORS.accent,
+          outlineWidth: 2,
+          closingPointColor: MAP_COLORS.accent,
+          closingPointOutlineColor: MAP_COLORS.outline,
+          closingPointWidth: 5,
+          closingPointOutlineWidth: 2,
+          editedPointColor: MAP_COLORS.accent,
+          coordinatePointColor: MAP_COLORS.accent,
+        },
+      }),
+    ],
+  });
+  draw.start();
+  draw.setMode("polygon");
+  return draw;
 }

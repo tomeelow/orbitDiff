@@ -120,6 +120,30 @@ export interface RulePreview {
   retracted: number; // of those, later dismissed or found seasonal
 }
 
+/** Evaluation labels for an area (admins): eval/<name>.geojson, eval/README.md. */
+export type LabelCategory = Exclude<Category, "other">;
+
+export interface LabelChange {
+  category: LabelCategory;
+  month: string; // "2021-05": the first month it's visible from orbit
+  geometry: Polygon | { type: "MultiPolygon"; coordinates: LonLat[][][] };
+}
+
+export interface LabelSet {
+  first_month: string;
+  last_month: string;
+  hard_cases: string[];
+  verified_by: string | null;
+  verified_on: string | null; // "2026-11-07"
+  verified_with: string | null;
+  changes: LabelChange[];
+}
+
+export interface Labels extends LabelSet {
+  name: string; // saved as eval/<name>.geojson
+  saved: boolean;
+}
+
 export interface Me {
   email: string;
   admin: boolean; // sees the admin view
@@ -223,6 +247,9 @@ export const api = {
     }),
   me: () => request<Me>("/auth/me"),
   adminSummary: () => request<AdminSummary>("/admin/summary"),
+  labels: (id: number) => request<Labels>(`/aois/${id}/labels`),
+  saveLabels: (id: number, labels: LabelSet) =>
+    request<Labels>(`/aois/${id}/labels`, json("PUT", labels)),
   signIn: (email: string) => request<{ minutes: number }>("/auth/login", json("POST", { email })),
   signOut: () => request<void>("/auth/logout", { method: "POST" }),
 };

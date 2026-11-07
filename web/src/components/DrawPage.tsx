@@ -5,12 +5,11 @@ import {
   ScaleControl,
 } from "maplibre-gl";
 import { useEffect, useRef, useState } from "react";
-import { TerraDraw, TerraDrawPolygonMode, ValidateNotSelfIntersecting } from "terra-draw";
-import { TerraDrawMapLibreGLAdapter } from "terra-draw-maplibre-gl-adapter";
+import type { TerraDraw } from "terra-draw";
 import { ApiError, api } from "../api";
 import { navigate, type Theme, useLoad } from "../hooks";
 import { type Polygon, polygonAreaKm2 } from "../lib/geo";
-import { createMap, MAP_COLORS, swapBasemap } from "../map";
+import { createMap, drawPolygons, swapBasemap } from "../map";
 
 /** Draw one polygon, see its size against the cap, name it and start the backfill. */
 export function DrawPage({ theme }: { theme: Theme }) {
@@ -44,29 +43,7 @@ export function DrawPage({ theme }: { theme: Theme }) {
     );
     map.addControl(new ScaleControl({ unit: "metric" }), "bottom-left");
     map.on("load", () => {
-      const draw = new TerraDraw({
-        adapter: new TerraDrawMapLibreGLAdapter({ map }),
-        modes: [
-          new TerraDrawPolygonMode({
-            editable: true,
-            validation: (feature) => ValidateNotSelfIntersecting(feature),
-            styles: {
-              fillColor: MAP_COLORS.accent,
-              fillOpacity: 0.12,
-              outlineColor: MAP_COLORS.accent,
-              outlineWidth: 2,
-              closingPointColor: MAP_COLORS.accent,
-              closingPointOutlineColor: MAP_COLORS.outline,
-              closingPointWidth: 5,
-              closingPointOutlineWidth: 2,
-              editedPointColor: MAP_COLORS.accent,
-              coordinatePointColor: MAP_COLORS.accent,
-            },
-          }),
-        ],
-      });
-      draw.start();
-      draw.setMode("polygon");
+      const draw = drawPolygons(map);
       const polygons = () => draw.getSnapshot().filter((f) => f.geometry.type === "Polygon");
       draw.on("change", () => {
         const all = polygons();
