@@ -1,12 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ApiError, api, SIGNED_OUT } from "./api";
 
-/** Routes are hash paths: "#/", "#/new", "#/areas/3". */
-export type Route = { page: "areas" } | { page: "new" } | { page: "area"; id: number };
+/** Routes are hash paths: "#/", "#/new", "#/areas/3", and "#/areas/3/changes/17" (an alert
+email's link to one change). */
+export type Route =
+  | { page: "areas" }
+  | { page: "new" }
+  | { page: "area"; id: number; change: number | null };
 
-function parseRoute(hash: string): Route {
+export function parseRoute(hash: string): Route {
   if (hash === "#/new") return { page: "new" };
-  const match = /^#\/areas\/(\d+)$/.exec(hash);
-  return match ? { page: "area", id: Number(match[1]) } : { page: "areas" };
+  const match = /^#\/areas\/(\d+)(?:\/changes\/(\d+))?$/.exec(hash);
+  if (!match) return { page: "areas" };
+  return { page: "area", id: Number(match[1]), change: match[2] ? Number(match[2]) : null };
 }
 
 export function useRoute(): Route {
@@ -64,6 +70,39 @@ export function useTheme(): [Theme, () => void] {
     });
   }, []);
   return [theme, toggle];
+}
+
+export type Account =
+  | { state: "loading" }
+  | { state: "signed-out" }
+  | { state: "signed-in"; email: string }
+  | { state: "error"; message: string };
+
+/** Who is signed in. Any API answer of 401 signs the app out, wherever it came from. */
+export function useAccount(): [Account, () => void, () => Promise<void>] {
+  const [account, setAccount] = useState<Account>({ state: "loading" });
+  const check = useCallback(() => {
+    api.me().then(
+      (me) => setAccount({ state: "signed-in", email: me.email }),
+      (error: unknown) =>
+        setAccount(
+          error instanceof ApiError && error.status === 401
+            ? { state: "signed-out" }
+            : { state: "error", message: error instanceof Error ? error.message : String(error) },
+        ),
+    );
+  }, []);
+  useEffect(() => {
+    check();
+    const signedOut = () => setAccount({ state: "signed-out" });
+    window.addEventListener(SIGNED_OUT, signedOut);
+    return () => window.removeEventListener(SIGNED_OUT, signedOut);
+  }, [check]);
+  const signOut = useCallback(async () => {
+    await api.signOut().catch(() => {}); // signed out here either way
+    setAccount({ state: "signed-out" });
+  }, []);
+  return [account, check, signOut];
 }
 
 export type Load<T> =

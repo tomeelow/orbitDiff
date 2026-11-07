@@ -398,3 +398,46 @@ way to compare month A with month B side by side.
 
 OpenFreeMap's terms or availability changing, or deployment needing a basemap we host
 ourselves (Protomaps on object storage is the likely swap; only the two URLs change).
+
+---
+
+## ADR-012 — Sign-in by emailed link, server sessions, and alert emails sent at most once
+
+**Status:** accepted · **Date:** 2026-11-07
+
+### Context
+
+Phase 9 needs accounts (an AOI around someone's home is personal data), a verified
+address for alerts, and emails that are never sent twice and never sent about history.
+
+### Decision
+
+- Sign-in is a link emailed to the address: no passwords. The link token and the session
+  token are random; only their SHA-256 hashes are stored. The session is an HttpOnly,
+  SameSite=Lax cookie checked against the `sessions` table on every request, so signing
+  out or deleting a user ends it at once.
+- A sign-in link works for 15 minutes, any number of times. A feedback link is an HMAC over
+  ids only (no email address in any URL), valid 90 days, and its GET only shows a button
+  that POSTs.
+- Sending claims a `notifications` row (unique per event, user and kind) in its own
+  transaction before talking to the mail server. A failed send is retried up to a limit; a
+  claim that never finished is never retried.
+- Alerts start from the newest pass in the archive when they are turned on.
+
+### Reasoning
+
+- Mail scanners (Outlook Safe Links and others) open links before people do. A single-use
+  sign-in link would be spent by the scanner, and a feedback link that records on GET would
+  record verdicts nobody gave.
+- Server-side sessions over signed JWTs: revocation is a row delete, and the database is
+  already on every request path.
+- "At most once" over "at least once": a missed email costs less than a duplicate, in the
+  same way that a late alert costs less than a false one.
+- Starting from the archive's newest pass rather than the clock alerts on passes that
+  arrive in the catalog late, and never on what the user could already see.
+
+### What would change our mind
+
+Users wanting a password or SSO, abuse of the login endpoint (add rate limiting first), or
+a deployment where the API and the web app are not same-site, which the SameSite=Lax cookie
+assumes.

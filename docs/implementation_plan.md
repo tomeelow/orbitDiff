@@ -544,6 +544,15 @@ The same function powers the "N of M past changes would have alerted" preview.
 
 **Deliverable:** draw an area, turn on alerts, and receive a real email after a real pass. "Not a real change" lands in the `feedback` table with the event's provenance.
 
+> **As built (2026-11-07):**
+> - Accounts (`orbitdiff.accounts`): `POST /auth/login` emails a link; `GET /auth/callback` creates the user on first sign-in, starts a 30-day session (an HttpOnly, SameSite=Lax cookie; only token hashes are stored) and sends the browser to the web app. Links work for 15 minutes, any number of times, because mail scanners open links first. Every AOI has an owner; any other AOI is a 404. `orbitdiff assign-aois` gives AOIs from before accounts an owner. See ADR-012.
+> - Alert rules (`alert_rules`, migration 0004) with `GET/PUT /aois/{id}/alert-rule` and `POST .../preview`. The preview, the events list's verdicts and sending all go through `alerts.should_alert`. "Would have alerted" counts an event if any status in its history passed the rule, so a pending alert later dismissed counts as the false alarm it would have been: on Grünheide the default rule gives 67 of 1,604, 34 of them retracted.
+> - Turning alerts on records `watching_since`: the newest pass already in the archive (now, if a backfill is still running). Only a status set by a later pass alerts.
+> - The new-pass loop is the incremental backfill: `orbitdiff scheduler` queues it every `poll_every_hours` for watched AOIs (claimed on the AOI's stage, so it's never queued twice), and its last step is `notify.notify`. The STAC search per AOI covers only the current year; finished years are cached. Grouping AOIs by MGRS tile waits for many AOIs.
+> - `notifications` holds one row per (event, user, kind), claimed and committed before sending: "alert", then at most one "update" when the event is confirmed, dismissed or found seasonal. A failed send is retried on the next run, up to `send_attempts`; a claim the process died holding is never resent.
+> - The email has inline before/after crops with the footprint outlined (the same PNGs the app shows), size, NDVI, months compared, status, method version, a deep link (`#/areas/{id}/changes/{event}`) and a signed "Not a real change" link (HMAC, `ORBITDIFF_SIGNING_KEY`, 90 days). The link opens a page with one button that POSTs, rather than recording on GET: scanners prefetch links. `feedback` stores the event's provenance with each verdict; the app has the same button.
+> - Not yet: rate limiting on `/auth/login`, a digest when many changes arrive at once, and TiTiler tiles behind the same ownership check (Phase 11).
+
 ---
 
 ## Phase 10 — Monitoring and the Feedback Loop

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { type ChangeEvent, eventImageUrl } from "../api";
 import type { Load } from "../hooks";
 import { alertText, CATEGORY, historyLine, STATUS } from "../lib/changes";
@@ -7,8 +8,9 @@ import { Segmented } from "./ui";
 
 export type Shown = "alerts" | "all";
 
-/** The changes found here, newest first. "Would alert" lists what the alert rule lets
-through; "All" adds what it held back (seasonal, dismissed, unwatched, too small). */
+/** The changes found here, newest first. "Would alert" lists what the alert rule's settings
+would have emailed about, false alarms a later pass took back included; "All" adds what it
+held back (seasonal from the start, unwatched, too small). */
 export function ChangesCard({
   areaId,
   events,
@@ -17,6 +19,7 @@ export function ChangesCard({
   selected,
   onSelect,
   onRetry,
+  onNotReal,
 }: {
   areaId: number;
   events: Load<ChangeEvent[]>;
@@ -25,6 +28,7 @@ export function ChangesCard({
   selected: number | null;
   onSelect: (event: ChangeEvent | null) => void;
   onRetry: () => void;
+  onNotReal: (event: ChangeEvent) => Promise<void>;
 }) {
   const all = events.state === "done" ? events.data : [];
   const alerting = all.filter((e) => e.alerts);
@@ -62,8 +66,8 @@ export function ChangesCard({
       )}
       {events.state === "done" && all.length > 0 && list.length === 0 && (
         <p className="muted">
-          None of the {all.length} changes found here would have sent an alert: each was seasonal,
-          dismissed by a later pass, too small, or in a category not watched.
+          None of the {all.length} changes found here would have sent an alert: each was seasonal
+          from the start, too small, or in a category not watched.
         </p>
       )}
       {list.length > 0 && (
@@ -75,6 +79,7 @@ export function ChangesCard({
                 event={e}
                 open={e.id === selected}
                 onToggle={() => onSelect(e.id === selected ? null : e)}
+                onNotReal={() => onNotReal(e)}
               />
             </li>
           ))}
@@ -93,12 +98,27 @@ function ChangeRow({
   event,
   open,
   onToggle,
+  onNotReal,
 }: {
   areaId: number;
   event: ChangeEvent;
   open: boolean;
   onToggle: () => void;
+  onNotReal: () => Promise<void>;
 }) {
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function notReal() {
+    setSending(true);
+    setError(null);
+    try {
+      await onNotReal();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSending(false);
+    }
+  }
   const category = CATEGORY[event.category];
   const ndvi =
     event.ndvi_before !== null && event.ndvi_after !== null
@@ -149,6 +169,20 @@ function ChangeRow({
             <span className="fig">{event.items.length}</span> clear passes.{" "}
             <span className="fig">{event.method_version}</span>
           </p>
+          <div className="change-feedback">
+            {event.not_real ? (
+              <p className="muted small">You marked this as not a real change. Thanks.</p>
+            ) : (
+              <button type="button" className="btn" onClick={notReal} disabled={sending}>
+                Not a real change
+              </button>
+            )}
+            {error && (
+              <p className="error-text small" role="alert">
+                {error}
+              </p>
+            )}
+          </div>
         </div>
       )}
     </div>

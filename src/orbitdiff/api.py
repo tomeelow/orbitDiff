@@ -609,8 +609,12 @@ class Me(BaseModel):
     email: str
 
 
+class LinkSent(BaseModel):
+    minutes: int  # how long the link works
+
+
 @app.post("/auth/login", status_code=202)
-def login(body: Login, s: SessionDep) -> None:
+def login(body: Login, s: SessionDep) -> LinkSent:
     """Email a sign-in link. The answer is the same whether or not the address has an
     account, so it can't be used to find out who does."""
     email = accounts.normalize_email(body.email)
@@ -621,6 +625,7 @@ def login(body: Login, s: SessionDep) -> None:
     s.commit()
     link = f"{settings().api_url}/auth/callback?token={token}"
     mail.send(accounts.login_email(email, link, cfg))
+    return LinkSent(minutes=cfg.login_link_minutes)
 
 
 def _page(title: str, body: str, status: int = 200) -> HTMLResponse:

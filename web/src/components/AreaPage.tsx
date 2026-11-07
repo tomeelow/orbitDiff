@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type AoiDetail, api, type ChangeEvent, type Progress, type Scene } from "../api";
 import { type Theme, useLoad } from "../hooks";
 import { CATEGORY } from "../lib/changes";
 import { formatArea } from "../lib/format";
 import { compareNote, defaultPair, monthKey, monthLabel } from "../lib/months";
+import { archiveYears } from "../lib/rules";
+import { AlertsCard } from "./Alerts";
 import { ChangesCard, type Shown } from "./Changes";
 import { CompareMap, type Layer } from "./CompareMap";
 import { BackfillCard, MonthCard, StatsCard } from "./Panels";
@@ -13,7 +15,15 @@ import { ErrorState, LoadingState, Segmented } from "./ui";
 const POLL_MS = 2000;
 const FRAME_MS = 1000; // timelapse: one month per second
 
-export function AreaPage({ id, theme }: { id: number; theme: Theme }) {
+export function AreaPage({
+  id,
+  change,
+  theme,
+}: {
+  id: number;
+  change: number | null; // a change to open on, from an alert email's link
+  theme: Theme;
+}) {
   const [detail, reload] = useLoad(() => api.area(id), [id]);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [updating, setUpdating] = useState(false);
@@ -94,6 +104,7 @@ export function AreaPage({ id, theme }: { id: number; theme: Theme }) {
   return (
     <Archive
       area={data}
+      change={change}
       theme={theme}
       onUpdate={startBackfill}
       updating={updating}
@@ -139,12 +150,14 @@ type Slot = "A" | "B";
 
 function Archive({
   area,
+  change,
   theme,
   onUpdate,
   updating,
   status,
 }: {
   area: AoiDetail;
+  change: number | null;
   theme: Theme;
   onUpdate: () => void;
   updating: boolean;
@@ -263,6 +276,26 @@ function Archive({
       setPair((p) => ({ a: index.has(before) ? before : (p?.a ?? before), b: after }));
     },
     [index],
+  );
+
+  // An alert email's link opens on its change, once the archive and the changes are here.
+  const opened = useRef<number | null>(null);
+  useEffect(() => {
+    if (change === null || opened.current === change) return;
+    if (events.state !== "done" || months.length === 0) return;
+    const event = events.data.find((e) => e.id === change);
+    opened.current = change;
+    if (!event) return;
+    if (!event.alerts) setShown("all");
+    selectChange(event);
+  }, [change, events, months, selectChange]);
+
+  const notReal = useCallback(
+    async (event: ChangeEvent) => {
+      await api.notReal(area.id, event.id);
+      reloadEvents();
+    },
+    [area.id, reloadEvents],
   );
 
   const togglePlay = useCallback(() => {
@@ -431,6 +464,12 @@ function Archive({
           selected={selected}
           onSelect={selectChange}
           onRetry={reloadEvents}
+          onNotReal={notReal}
+        />
+        <AlertsCard
+          areaId={area.id}
+          years={archiveYears(area.first_month, area.last_month)}
+          onSaved={reloadEvents}
         />
         <MonthCard
           month={b}

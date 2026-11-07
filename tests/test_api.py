@@ -347,7 +347,9 @@ def test_sign_in_by_emailed_link(data_dir, outbox):
     with TestClient(api.app) as c:
         assert c.get("/auth/me").status_code == 401
         assert c.post("/auth/login", json={"email": "not an address"}).status_code == 422
-        assert c.post("/auth/login", json={"email": " Me@Example.com "}).status_code == 202
+        r = c.post("/auth/login", json={"email": " Me@Example.com "})
+        assert r.status_code == 202
+        assert r.json() == {"minutes": pipeline_config().accounts.login_link_minutes}
         (message,) = outbox
         assert message["To"] == "me@example.com"
         link = next(w for w in message.get_content().split() if "/auth/callback?token=" in w)

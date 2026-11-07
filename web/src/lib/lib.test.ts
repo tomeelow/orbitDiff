@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
+import type { AlertSettings, EventStatus } from "../api";
+import { parseRoute } from "../hooks";
 import { alertText, historyLine } from "./changes";
 import { formatArea, formatBytes, formatLonLat, formatUtc } from "./format";
 import { boundsOf, type Polygon, polygonAreaKm2 } from "./geo";
 import { compareNote, defaultPair, type MonthFacts, monthLabel, shiftMonth } from "./months";
+import { archiveYears, perYear, sameSettings } from "./rules";
 import { intersect, tilesCovering, tileUrl } from "./tiles";
 
 // The test AOI near Kyiv; the API measures it at 2.456 km² in UTM zone 36N.
@@ -125,10 +128,13 @@ describe("tiles", () => {
 
 describe("changes", () => {
   it("words the API's alert verdict without deciding it", () => {
-    expect(alertText({ alerts: true, alert_reason: "alert" })).toBe("Would alert");
-    expect(alertText({ alerts: false, alert_reason: "under 0.5 ha" })).toBe("Under 0.5 ha");
-    expect(alertText({ alerts: false, alert_reason: "category off" })).toBe("Category not watched");
-    expect(alertText({ alerts: false, alert_reason: "seasonal" })).toBe("No alert");
+    const verdict = (alerts: boolean, alert_reason: string, status: EventStatus = "pending") =>
+      alertText({ alerts, alert_reason, status });
+    expect(verdict(true, "alert")).toBe("Would alert");
+    expect(verdict(true, "alert", "dismissed")).toBe("Would alert, then retract");
+    expect(verdict(false, "under 0.5 ha")).toBe("Under 0.5 ha");
+    expect(verdict(false, "category off")).toBe("Category not watched");
+    expect(verdict(false, "seasonal", "seasonal")).toBe("No alert");
   });
 
   it("tells a status history by pass and by month", () => {
@@ -148,5 +154,36 @@ describe("changes", () => {
         false,
       ),
     ).toBe("Dismissed: no longer detected");
+  });
+});
+
+describe("rules", () => {
+  const rule: AlertSettings = {
+    enabled: true,
+    categories: ["buildings_roads", "vegetation_loss"],
+    skip_seasonal: true,
+    min_ha: 0.5,
+  };
+  it("compares settings whatever the category order", () => {
+    const reordered = { ...rule, categories: ["vegetation_loss", "buildings_roads"] as const };
+    expect(sameSettings(rule, { ...reordered, categories: [...reordered.categories] })).toBe(true);
+    expect(sameSettings(rule, { ...rule, min_ha: 0.6 })).toBe(false);
+    expect(sameSettings(rule, { ...rule, categories: ["vegetation_loss"] })).toBe(false);
+  });
+  it("puts a count over the archive's years", () => {
+    expect(archiveYears("2017-01-01", "2026-12-01")).toBe(10);
+    expect(archiveYears(null, "2026-12-01")).toBe(0);
+    expect(perYear(67, 8.9)).toBe("about 7.5 a year");
+    expect(perYear(150, 10)).toBe("about 15 a year");
+    expect(perYear(3, 0.5)).toBeNull();
+  });
+});
+
+describe("routes", () => {
+  it("opens an area on one change from an alert email's link", () => {
+    expect(parseRoute("#/areas/3/changes/17")).toEqual({ page: "area", id: 3, change: 17 });
+    expect(parseRoute("#/areas/3")).toEqual({ page: "area", id: 3, change: null });
+    expect(parseRoute("#/new")).toEqual({ page: "new" });
+    expect(parseRoute("#/areas/x")).toEqual({ page: "areas" });
   });
 });
