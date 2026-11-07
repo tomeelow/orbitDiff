@@ -8,7 +8,7 @@ Guidance for Claude when working in this repository.
 
 Imagery comes from the **Earth Search STAC API** (Element 84; `sentinel-2-l2a` as Cloud-Optimized GeoTIFFs on AWS), with **Microsoft Planetary Computer** as the fallback (ADR-002). Only the AOI's window is read, via HTTP range requests. Full 110 km tiles are never downloaded.
 
-`mockup/orbit-diff.html` is the UX reference: layout, interactions, alert rules, the alert email, and the pipeline outline. Its imagery and events are synthetic. Match its behaviour, not its code. `docs/implementation_plan.md` sets the direction; `docs/ADR.md` records decisions and the reasons they changed.
+`mockup/orbit-diff.html` is an early sketch of the product: the features (drawing an AOI, the timeline, swipe A/B, NDVI, events, alert rules, the alert email) and roughly how they fit together. Its imagery and events are synthetic. It is a starting idea, not a spec: the real UI may look and lay out differently where that serves users better. Keep its features unless there's a reason to drop them; take its visual design as one option. `docs/implementation_plan.md` sets the direction; `docs/ADR.md` records decisions and the reasons they changed.
 
 The point of this project is the **path from a polygon to an alert someone trusts**: scene search → windowed reads → cloud masking → monthly composites → change detection → confirmation → alert → user feedback → better model. A change map is easy to make. One that doesn't cry wolf is the deliverable.
 

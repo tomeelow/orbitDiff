@@ -4,7 +4,7 @@
 >
 > **Headline target:** alerts a user would trust: **fewer than one false alert per watched area per year** on the evaluation set, sent within **one clear pass** of the change becoming visible, with every alert traceable to the scenes that produced it.
 >
-> **How to read this plan:** it sets direction, not contract. Tools and specific solutions can change during implementation when there's a reason to; record the reason in `docs/ADR.md`. The UX reference is `mockup/orbit-diff.html`.
+> **How to read this plan:** it sets direction, not contract. Tools and specific solutions can change during implementation when there's a reason to; record the reason in `docs/ADR.md`. `mockup/orbit-diff.html` sketches the features and how they fit together; it's an idea of the UI, not its final look.
 
 ---
 
@@ -117,7 +117,7 @@ orbit-diff/
 ├── web/                # React + TypeScript + MapLibre
 ├── config/             # pipeline parameters (TOML)
 ├── tests/
-├── mockup/             # UX reference, synthetic imagery
+├── mockup/             # early UI sketch, synthetic imagery
 ├── docker/
 ├── docs/               # ADR.md, implementation_plan.md
 ├── .github/workflows/
@@ -328,7 +328,7 @@ GET  /health
 
 ## Phase 5 — Web App v1: Browse the Archive
 
-**Goal:** the mockup's left half and stats, on real imagery. This is the first milestone worth showing to someone.
+**Goal:** the features of the mockup's left half and stats, on real imagery. This is the first milestone worth showing to someone.
 
 ### Features (in priority order)
 1. **Draw an AOI** on a MapLibre map (Terra Draw polygon tool), with the area and the size cap shown while drawing.
@@ -339,7 +339,7 @@ GET  /health
 6. **Stats card:** area, archive range, scenes indexed and % usable, data actually read.
 7. **Hover readout:** coordinates, NDVI, month.
 
-Keep the mockup's visual language (tokens, type, layout); it was designed for light and dark themes and phone width.
+The mockup's visual language (tokens, type, layout) is a starting point, not a requirement: the UI may look different where that works better. It must work in light and dark themes and at phone width.
 
 **Deliverable:** draw an area, watch the backfill progress, then browse ten years of it.
 
@@ -494,7 +494,7 @@ scheduler (every few hours)
 ```
 
 ### Alert rules
-Per AOI, as in the mockup: on/off, categories, skip seasonal, smallest change (0.1–5 ha, never below the configured floor).
+Per AOI, as sketched in the mockup: on/off, categories, skip seasonal, smallest change (0.1–5 ha, never below the configured floor).
 ```python
 def should_alert(event: ChangeEvent, rule: AlertRule) -> tuple[bool, str]:
     if not rule.enabled:
