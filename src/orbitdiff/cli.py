@@ -1,4 +1,4 @@
-"""Command line entry points: `orbitdiff fetch|mask|mask-report|composites ...`."""
+"""Command line entry points: `orbitdiff fetch|mask|mask-report|composites|worker ...`."""
 
 import argparse
 import sys
@@ -7,7 +7,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from orbitdiff import composites, mask_report, masking
+from orbitdiff import composites, jobs, mask_report, masking
 from orbitdiff.aoi import load_geometry, make_grid
 from orbitdiff.config import pipeline_config, settings
 from orbitdiff.fetch import fetch_aoi
@@ -49,6 +49,16 @@ def _composites(args: argparse.Namespace) -> None:
     print(composites.update_composites(args.id, pipeline_config(), settings().data_dir))
 
 
+def _worker(args: argparse.Namespace) -> None:
+    from redis import Redis
+    from rq import Queue, SimpleWorker
+
+    redis = Redis.from_url(settings().redis_url)
+    # SimpleWorker runs jobs in this process: the cloud model stays loaded between jobs,
+    # and macOS can't fork safely once GDAL and PyTorch threads are running.
+    SimpleWorker([Queue(jobs.QUEUE, connection=redis)], connection=redis).work()
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="orbitdiff")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -71,6 +81,9 @@ def main(argv: list[str] | None = None) -> None:
     comp = sub.add_parser("composites", help="bring monthly composites up to date")
     comp.add_argument("--id", required=True, help="AOI id")
     comp.set_defaults(run=_composites)
+
+    worker = sub.add_parser("worker", help="run queued backfills (needs the ml group)")
+    worker.set_defaults(run=_worker)
 
     args = parser.parse_args(argv)
     logger.remove()

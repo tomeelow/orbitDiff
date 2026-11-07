@@ -315,6 +315,13 @@ GET  /health
 
 **Deliverable:** a FastAPI service plus TiTiler that can create an AOI, run its backfill as a job, and serve its timeline, stats, NDVI series and tiles.
 
+> **As built (2026-11-07):**
+> - `orbitdiff.api` serves `POST/GET /aois`, `GET /aois/{id}` (stats, including bytes read against the estimated cost of whole files, and the grid's corners for image overlays), `POST /aois/{id}/backfill` (retry or catch up), `/progress`, `/timeline` (with TiTiler tile URLs per month), `/ndvi`, `/scenes?month=` and `/health`. Events, alert rules and feedback arrive with Phases 7 and 9.
+> - Single-scene images come from the cube through the API (`/aois/{id}/scenes/{item}/{style}.png`), not TiTiler's STAC endpoints (ADR-010).
+> - The backfill is an RQ job (`orbitdiff worker`, a SimpleWorker): fetch → cloud model → composites → `scenes` and `months` rows, with progress on the AOI row. Records live in Postgres via SQLAlchemy and Alembic (`uv run alembic upgrade head`).
+> - TiTiler 2.4.0 runs in compose. It reads `data/composites` read-only and loads the mockup's NDVI ramp from `docker/titiler/colormaps`. Tile URLs carry each month's version, so they are cached as immutable.
+> - Before Phase 9 exposes anything: TiTiler's `url=` parameter can read any AOI's composites, so tiles must go through the API or signed URLs once AOIs belong to users.
+
 ---
 
 ## Phase 5 — Web App v1: Browse the Archive

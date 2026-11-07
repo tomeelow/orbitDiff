@@ -1,4 +1,4 @@
-# Local infrastructure. Application services (api, worker, scheduler, titiler, web) are
+# Local infrastructure. Application services (api, worker, scheduler, web) are
 # added in the phase that builds them; see docs/implementation_plan.md, Phase 11.
 #
 # Object storage is not here: in development the AOI cubes and composites go to a local
@@ -7,11 +7,12 @@
 services:
   db:
     image: postgis/postgis:17-3.7
+    platform: linux/amd64            # the image is amd64-only; Apple Silicon runs it emulated
     environment:
       POSTGRES_USER: orbitdiff
       POSTGRES_PASSWORD: orbitdiff   # development only
       POSTGRES_DB: orbitdiff
-    ports: ["5432:5432"]
+    ports: ["5433:5432"]             # 5433: leaves a local Postgres on 5432 alone
     volumes: [pg:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U orbitdiff"]
@@ -25,6 +26,18 @@ services:
   mailpit:                           # catches every email in development: http://localhost:8025
     image: axllent/mailpit:v1.32.0
     ports: ["1025:1025", "8025:8025"]
+
+  titiler:                           # map tiles from the composite COGs (ADR-007)
+    image: ghcr.io/developmentseed/titiler:2.4.0
+    ports: ["8001:80"]
+    environment:
+      COLORMAP_DIRECTORY: /colormaps   # the mockup's NDVI ramp, from orbitdiff.render
+      # Tile URLs carry each month's version, so a URL's tiles never change.
+      TITILER_API_CACHECONTROL: "public, max-age=31536000, immutable"
+      WEB_CONCURRENCY: "2"
+    volumes:
+      - ./data/composites:/data/composites:ro
+      - ./docker/titiler/colormaps:/colormaps:ro
 
 volumes:
   pg:

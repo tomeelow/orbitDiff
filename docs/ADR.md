@@ -321,3 +321,33 @@ Read each asset with rasterio through a `WarpedVRT` onto the AOI's fixed grid
 ### What would change our mind
 
 Larger AOIs or many-band products where dask-chunked lazy loading pays off.
+
+---
+
+## ADR-010 — Single-scene images come from the cube, not TiTiler's STAC endpoints
+
+**Status:** accepted · **Date:** 2026-11-07
+
+### Context
+
+ADR-007 planned single-scene views through TiTiler's STAC endpoints, reading each item's
+COGs from Earth Search on every view and applying the BOA offset in a tile expression.
+
+### Decision
+
+The API renders a pass as a PNG over the AOI's grid, straight from the cube
+(`GET /aois/{id}/scenes/{item}/{style}.png`). The web app places it with the grid's
+four corners. Composite months still go through TiTiler.
+
+### Reasoning
+
+- It shows exactly the pixels the pipeline analysed, harmonized by the one function that
+  does it (ADR-003), instead of a second harmonization written as a tile expression.
+- Viewing a scene reads nothing from the catalog again; the bytes were paid once.
+- AOIs are at most a few hundred pixels across, so a single image is enough at any zoom
+  the map allows.
+
+### What would change our mind
+
+AOIs large enough that a single image is too heavy, or a need to show bands the cube
+doesn't hold.

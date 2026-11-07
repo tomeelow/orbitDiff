@@ -1,5 +1,6 @@
-"""Shared fixtures. Tests run offline: Python sockets are blocked, and every raster a test
-reads is a small tiled GeoTIFF written to a temp dir, standing in for a COG."""
+"""Shared fixtures. Tests run offline: Python sockets reach only localhost (the test
+database), and every raster a test reads is a small tiled GeoTIFF written to a temp dir,
+standing in for a COG."""
 
 import socket
 from datetime import UTC, datetime
@@ -18,10 +19,16 @@ AOI = box(30.674, 50.3845, 30.701, 50.396)
 
 @pytest.fixture(autouse=True)
 def _no_network(monkeypatch):
-    def refuse(*args, **kwargs):
-        raise RuntimeError("tests must not touch the network")
+    """Only local services (the test database) are reachable."""
+    connect = socket.socket.connect
 
-    monkeypatch.setattr(socket.socket, "connect", refuse)
+    def local_only(sock, address):
+        host = address[0] if isinstance(address, tuple) else "unix"
+        if host not in ("127.0.0.1", "::1", "localhost", "unix"):
+            raise RuntimeError(f"tests must not touch the network ({host})")
+        return connect(sock, address)
+
+    monkeypatch.setattr(socket.socket, "connect", local_only)
 
 
 @pytest.fixture

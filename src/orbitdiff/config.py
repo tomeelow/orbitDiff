@@ -84,6 +84,10 @@ class DetectionConfig(_Section):
     confirm_on_next_clear: bool
 
 
+class JobsConfig(_Section):
+    backfill_timeout_hours: float = Field(gt=0)
+
+
 class ScheduleConfig(_Section):
     poll_every_hours: int = Field(ge=1)
 
@@ -95,6 +99,7 @@ class PipelineConfig(_Section):
     masking: MaskingConfig
     composites: CompositesConfig
     detection: DetectionConfig
+    jobs: JobsConfig
     schedule: ScheduleConfig
 
 
@@ -106,6 +111,12 @@ class Settings(BaseSettings):
     pipeline_config: Path = REPO_ROOT / "config" / "pipeline.toml"
     # Per-AOI cubes, composites and the STAC search cache. Never in git.
     data_dir: Path = REPO_ROOT / "data"
+    # Development defaults match docker-compose.yml; deployments set them in the environment.
+    database_url: str = "postgresql+psycopg://orbitdiff:orbitdiff@localhost:5433/orbitdiff"
+    redis_url: str = "redis://localhost:6379/0"
+    titiler_url: str = "http://localhost:8001"  # as the browser reaches it
+    titiler_data_dir: str = "/data"  # where TiTiler sees data_dir
+    cors_origins: list[str] = ["http://localhost:5173"]  # the web app's dev server
 
 
 def load_pipeline_config(path: Path) -> PipelineConfig:
