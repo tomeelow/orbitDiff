@@ -47,6 +47,26 @@ fill_max_months = 3               # display only: fill a pixel from clear months
 min_mapping_unit_ha = 0.1         # floor under the user's "smallest change" slider (10 pixels)
 seasonal_revert_months = 3        # a change that reverts within this is seasonal
 confirm_on_next_clear = true
+# A pass speaks for an event when this much of the footprint is clear on it and observed
+# in the reference, and agrees when the change shows in this much of that part.
+footprint_clear_frac = 0.5
+agree_frac = 0.5
+# Detector thresholds. PROVISIONAL: starting values from the implementation plan, not yet
+# tuned on a verified evaluation set (eval/README.md).
+ndvi_drop = 0.3                   # naive baseline: NDVI fall against the same month a year earlier
+
+[detection.categories]            # starting heuristics (implementation plan, Phase 7), on medians over the footprint
+water_ndwi = 0.0                  # NDWI after above this, and not before: water
+built_ndvi = 0.25                 # NDVI after below this: built, bare or industrial
+vegetation_ndvi = 0.6             # NDVI before at least this: forest or shrub
+bare_ndvi = 0.35                  # ...and after below this: vegetation loss
+dark_visible = 0.05               # mean visible reflectance after below this,
+dark_nir = 0.15                   # and NIR below this: solar or industry
+
+[evaluation]                      # matching detections to labelled events (eval/)
+min_overlap = 0.25                # intersection, as a share of the smaller footprint
+months_before = 1                 # a detection may come this many months before the labelled month
+months_after = 12                 # ...or this many after
 
 [jobs]
 backfill_timeout_hours = 4         # a ten-year backfill reads ~1,400 passes

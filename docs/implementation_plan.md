@@ -386,6 +386,12 @@ Cross-checks outside our own labels: forest-loss events against Hansen GFC loss 
 
 **Deliverable:** `ml/evaluate.py` that runs any detector config over the evaluation set and prints the table, logged to MLflow.
 
+> **As built (2026-11-07):**
+> - `orbitdiff evaluate --method naive [--fetch]` (in `orbitdiff.evaluation`, not `ml/evaluate.py`) scores methods over `eval/*.geojson`. It prints the table with breakdowns by category and hard case, and logs to MLflow (local `mlflow.db`) with the set's version (a hash of the label files) and every threshold.
+> - A detection matches a labelled event when they overlap by at least a quarter of the smaller footprint and its month falls between one month before and twelve after the labelled month (`[evaluation]` in config). Delay runs from the first pass after the labelled month that sees at least half the footprint clearly.
+> - `orbitdiff.detection` holds the one detection path: anniversary composites, a 3 x 3 opening (slivers of 1–2 px go, rectangles keep their corners), the minimum mapping unit, footprints in UTM, heuristic categories, and per-event provenance (months compared, passes clear over the footprint). The naive NDVI drop is its first method.
+> - Thresholds are provisional until the set is labelled and verified. **The labels are not in yet:** they need someone to verify events against high-resolution imagery (`eval/README.md`).
+
 ---
 
 ## Phase 7 — Change Detection v1: Classical Detectors and Events
