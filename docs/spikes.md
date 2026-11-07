@@ -143,3 +143,32 @@ CDSE serves the original SAFE JPEG 2000 files. Windowed reads over JP2 are much 
 efficient than over COGs, and they need credentials. Planetary Computer serves the same
 product as COGs, needs only an anonymous token, and was much faster from this machine.
 Proposal in ADR-002.
+
+## 5. A late-ingested item whose offset flag is wrong (found 2026-11-07)
+
+During the Phase 4 smoke run (spike AOI, Jul–Nov 2026, 75 passes), one Earth Search item
+disagreed with its neighbours: `S2A_36UUA_20260707_0_L2A`, baseline 05.12, ingested on
+17 Aug 2026 (six weeks after the pass) by `sentinel2-to-stac` 2026.08.16, with
+`earthsearch:boa_offset_applied: false`. Every other item in the run says `true`.
+
+Its pixels say otherwise. Tile-wide red DN at 1/16 resolution, over pixels that SCL calls
+vegetation or bare soil on both days:
+
+| Reference pass | Pixels | Late item median | Reference median | Median difference |
+|---|---|---|---|---|
+| `S2B_36UUA_20260713_0_L2A` | 5,918 | 862 | 776 | +104 DN |
+| `S2B_36UUA_20260703_0_L2A` | 61,917 | 651 | 490 | +95 DN |
+
+An offset still in the pixels would show about +1000 DN. These differences are ordinary
+day-to-day and platform variation, so the offset is already removed and the flag is wrong.
+Following it (ADR-003) would subtract 1000 a second time and push red reflectance below
+zero. Here the pass was too cloudy over the AOI for its bands to be read, so no composite
+used it.
+
+Script: `spikes/offset_flag_check.py <suspect item> <reference item>` reads each item's red
+and SCL overviews (under 1 MB each).
+
+**Open question for ADR-003:** trust the flag less. Options: a pixel sanity check per pass
+(e.g. a large share of negative harmonized reflectance over SCL vegetation/bare pixels marks
+the pass suspect and keeps it out of composites), or treating late-ingested items by
+processing software version once more cases are known.

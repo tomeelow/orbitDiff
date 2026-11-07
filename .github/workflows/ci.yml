@@ -20,6 +20,18 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      db:                     # the API tests run against real PostGIS, as in docker-compose.yml
+        image: postgis/postgis:17-3.7
+        env:
+          POSTGRES_USER: orbitdiff
+          POSTGRES_PASSWORD: orbitdiff
+          POSTGRES_DB: orbitdiff_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U orbitdiff" --health-interval 5s --health-retries 10
+    env:
+      ORBITDIFF_TEST_DATABASE_URL: postgresql+psycopg://orbitdiff:orbitdiff@localhost:5432/orbitdiff_test
     steps:
       - uses: actions/checkout@v7
 
@@ -37,7 +49,7 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Test
-        run: uv run pytest
+        run: uv run pytest -rs   # -rs: a skipped database test would show here
 
       - name: Compose file is valid
         run: docker compose config --quiet

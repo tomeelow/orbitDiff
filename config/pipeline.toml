@@ -43,5 +43,8 @@ min_mapping_unit_ha = 0.1         # floor under the user's "smallest change" sli
 seasonal_revert_months = 3        # a change that reverts within this is seasonal
 confirm_on_next_clear = true
 
+[jobs]
+backfill_timeout_hours = 4         # a ten-year backfill reads ~1,400 passes
+
 [schedule]
 poll_every_hours = 3              # ADR-008

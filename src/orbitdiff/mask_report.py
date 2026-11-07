@@ -11,19 +11,15 @@ There are no cloud labels to score against until someone looks. So the report:
 
 import csv
 import html
-import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-import rasterio
-from rasterio.errors import NotGeoreferencedWarning
 
-from orbitdiff import cube, masking
+from orbitdiff import cube, masking, render
 from orbitdiff.config import REPO_ROOT, MaskingConfig
 
 LABELS_DIR = REPO_ROOT / "eval" / "scene_usability"
-TRUE_COLOR_MAX = 0.3  # reflectance mapped to white
 SCL_TINT = np.array([40, 110, 255])
 MODEL_TINT = np.array([255, 40, 200])
 
@@ -36,24 +32,10 @@ class MethodScore:
     thrown_away: int  # labelled usable, method calls it too cloudy
 
 
-def _rgb(red: np.ndarray, green: np.ndarray, blue: np.ndarray) -> np.ndarray:
-    stack = np.stack([red, green, blue], axis=-1) / TRUE_COLOR_MAX
-    return (np.nan_to_num(np.clip(stack, 0, 1)) * 255).astype(np.uint8)
-
-
 def _tint(rgb: np.ndarray, where: np.ndarray, color: np.ndarray) -> np.ndarray:
     out = rgb.astype(np.float32)
     out[where] = 0.4 * out[where] + 0.6 * color
     return out.astype(np.uint8)
-
-
-def _write_png(path: Path, rgb: np.ndarray) -> None:
-    height, width, _ = rgb.shape
-    profile = {"driver": "PNG", "width": width, "height": height, "count": 3, "dtype": "uint8"}
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", NotGeoreferencedWarning)  # a picture, not a map
-        with rasterio.open(path, "w", **profile) as dst:
-            dst.write(rgb.transpose(2, 0, 1))
 
 
 def score(rows: list[dict], labels: dict[str, bool], min_clear: float) -> list[MethodScore]:
@@ -101,11 +83,11 @@ def write_report(aoi_id: str, cfg: MaskingConfig, data_dir: Path) -> tuple[Path,
     for t in range(full.sizes["time"]):
         item = str(full["item_id"].values[t])
         day = str(full["time"].values[t].astype("datetime64[D]"))
-        rgb = _rgb(*(refl[b].values[t] for b in ("red", "green", "blue")))
+        rgb = render.true_color(*(refl[b].values[t] for b in ("red", "green", "blue")))
         overlay = _tint(rgb, ~scl_clear[t], SCL_TINT)
         overlay = _tint(overlay, scl_clear[t] & ~combined[t], MODEL_TINT)
-        _write_png(out / "img" / f"{item}.png", rgb)
-        _write_png(out / "img" / f"{item}_masks.png", overlay)
+        (out / "img" / f"{item}.png").write_bytes(render.png(rgb))
+        (out / "img" / f"{item}_masks.png").write_bytes(render.png(overlay))
         row = {
             "date": day,
             "item_id": item,
