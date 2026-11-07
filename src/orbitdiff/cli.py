@@ -1,4 +1,4 @@
-"""Command line entry points: `orbitdiff fetch|mask|mask-report ...`."""
+"""Command line entry points: `orbitdiff fetch|mask|mask-report|composites ...`."""
 
 import argparse
 import sys
@@ -7,7 +7,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from orbitdiff import mask_report, masking
+from orbitdiff import composites, mask_report, masking
 from orbitdiff.aoi import load_geometry, make_grid
 from orbitdiff.config import pipeline_config, settings
 from orbitdiff.fetch import fetch_aoi
@@ -45,6 +45,10 @@ def _mask_report(args: argparse.Namespace) -> None:
     print(f"report: {path}")
 
 
+def _composites(args: argparse.Namespace) -> None:
+    print(composites.update_composites(args.id, pipeline_config(), settings().data_dir))
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="orbitdiff")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -63,6 +67,10 @@ def main(argv: list[str] | None = None) -> None:
     report = sub.add_parser("mask-report", help="contact sheet: SCL alone vs SCL + model")
     report.add_argument("--id", required=True, help="AOI id")
     report.set_defaults(run=_mask_report)
+
+    comp = sub.add_parser("composites", help="bring monthly composites up to date")
+    comp.add_argument("--id", required=True, help="AOI id")
+    comp.set_defaults(run=_composites)
 
     args = parser.parse_args(argv)
     logger.remove()

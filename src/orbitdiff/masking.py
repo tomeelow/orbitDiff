@@ -178,11 +178,14 @@ def update_masks(aoi_id: str, cfg: MaskingConfig, data_dir: Path, model: CloudMo
     return summary
 
 
-def model_classes_for(passes: xr.Dataset, masks: xr.Dataset) -> np.ndarray:
+def model_classes_for(passes: xr.Dataset, masks: xr.Dataset | None) -> np.ndarray:
     """The model's classes lined up with `passes`. Raises if a pass with bands has none:
     a composite must never quietly fall back to SCL alone."""
-    by_item = {item: i for i, item in enumerate(masks["item_id"].values.tolist())}
-    stored = masks["model_class"].values
+    if masks is None:
+        by_item, stored = {}, None
+    else:
+        by_item = {item: i for i, item in enumerate(masks["item_id"].values.tolist())}
+        stored = masks["model_class"].values
     out = np.zeros((passes.sizes["time"], passes.sizes["y"], passes.sizes["x"]), np.uint8)
     for t, (item, status) in enumerate(
         zip(passes["item_id"].values, passes["status"].values, strict=True)

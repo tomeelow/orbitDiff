@@ -282,6 +282,8 @@ def monthly_composites(cube: xr.Dataset, clear: xr.DataArray) -> xr.Dataset:
 
 **Deliverable:** `composites/` writing COGs for the full archive of an AOI, with a test that composites from backfill and from scene-by-scene updates are identical.
 
+> **As built (2026-11-07):** `orbitdiff.composites.update_composites` (CLI: `orbitdiff composites --id <aoi>`) writes `<YYYY-MM>.tif` for detection (blue, green, red, nir, n_clear, n_snow; empty where no clear observation) and `<YYYY-MM>_display.tif` for tiles (gaps filled per pixel from the nearest clear month on each side, at most `fill_max_months` away, with a `filled` band), plus `months.json` with each month's pass counts, clear scenes and observed/filled shares. Months are fingerprinted by their passes and mask settings, so only what changed is recomputed; the display fill reads the stored detection COGs, which is what makes backfill and pass-by-pass updates byte-identical (tested). Files sit under `data/composites/<aoi>/` until object storage arrives.
+
 ---
 
 ## Phase 4 — API and Tile Serving
