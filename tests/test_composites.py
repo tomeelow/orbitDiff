@@ -170,3 +170,18 @@ def test_composites_refuse_passes_the_cloud_model_has_not_seen(tmp_path, grid, a
     cube.append(cube.cube_path(tmp_path, grid.aoi_id), cube.to_dataset(archive, grid))
     with pytest.raises(LookupError, match="update_masks"):
         composites.update_composites(grid.aoi_id, CFG, tmp_path)
+
+
+def test_a_pass_with_a_wrong_offset_flag_never_reaches_a_composite(tmp_path, grid, make_scene):
+    base = make_scene()
+    good = pass_read(base, grid, date(2021, 1, 5), "full", None)
+    # Same kind of pixels (no offset in them), but the flag says the offset is still there.
+    wrong_flag = replace(base, baseline="05.12", offset_removed=False)
+    wrong = pass_read(wrong_flag, grid, date(2021, 1, 20), "full", None)
+
+    run(tmp_path / "both", grid, [good, wrong])
+    run(tmp_path / "good", grid, [good])
+    both, alone = read_all(tmp_path / "both", grid.aoi_id), read_all(tmp_path / "good", grid.aoi_id)
+    np.testing.assert_array_equal(both["2021-01.tif"], alone["2021-01.tif"])
+    january = composites.read_months(tmp_path / "both", grid.aoi_id)[0]
+    assert (january.with_bands, january.clear_scenes) == (2, 1)

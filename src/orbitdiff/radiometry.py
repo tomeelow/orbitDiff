@@ -28,3 +28,22 @@ def to_reflectance(dn: np.ndarray, offset: int | np.ndarray) -> np.ndarray:
     """Reflectance as float32, with NaN where the DN is nodata."""
     refl = (dn.astype(np.float32) + offset) / QUANTIFICATION
     return np.where(dn == NODATA_DN, np.float32(np.nan), refl)
+
+
+def dark_target(
+    blue: np.ndarray, red: np.ndarray, reference: np.ndarray, percentile: float, min_pixels: int
+) -> np.ndarray:
+    """Per pass (time, y, x) -> (time,): a low percentile of min(blue, red) reflectance
+    over the reference pixels; NaN with fewer than `min_pixels` of them.
+
+    Vegetation is dark in red and water in blue, so a correctly harmonized pass reads a
+    little above zero here in any season. A pass whose offset was subtracted although its
+    pixels didn't carry it reads 0.1 lower, below zero (docs/spikes.md, section 5).
+    """
+    darker = np.minimum(blue, red)
+    out = np.full(darker.shape[0], np.nan, np.float32)
+    for t, (values, ref) in enumerate(zip(darker, reference, strict=True)):
+        values = values[ref & ~np.isnan(values)]
+        if values.size >= min_pixels:
+            out[t] = np.percentile(values, percentile)
+    return out

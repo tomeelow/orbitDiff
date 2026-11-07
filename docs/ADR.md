@@ -124,6 +124,11 @@ reflectance = (DN + offset_dn) / 10000
 catalogs that don't remove the offset (Earth Search `c1`, Planetary Computer). The
 `raster:bands` offset is never used.
 
+**Amended 2026-11-07 (spike 5):** the flag is wrong on some items, so a per-pass pixel
+check backs it. A pass whose dark targets read below −0.02 reflectance after harmonizing
+had the offset subtracted from pixels that didn't carry it. It's marked `offset_suspect`
+and gets no clear pixels, so no composite uses it.
+
 ### Reasoning
 
 Spike 2 checked the metadata against pixel values, using the same pass in three
@@ -136,17 +141,29 @@ processing versions:
 So Earth Search already removed the offset from those items, while still publishing
 `raster:bands` offset −0.1. Following that metadata would subtract the offset twice.
 
+Spike 5 then found the flag itself unreliable. Unflagged 04.00 items from late January
+and February 2022 do carry the offset, while unflagged items from mid-March 2022 on
+don't. Planetary Computer agrees on both. No metadata or date rule covers both without
+guessing from one tile, so the rule stays and each pass's own pixels check it. Left
+unchecked, two such passes in April 2022 would have shifted that month's composite by
++0.25 NDVI over most of the Kyiv AOI.
+
 ### Consequences
 
 - The function gets unit tests with fixtures from the versions in spike 2: pre-04.00,
   04.00 unflagged, 05.x flagged, `c1`, and Planetary Computer.
 - A new catalog can't be added without checking a known pass's pixels against this rule.
+- The pixel check sees one direction only: an offset subtracted twice drives dark targets
+  below zero, but an offset left in looks like a bright surface. Over bright AOIs a wrongly
+  flagged pass can slip through.
 
 ### What would change our mind
 
-Earth Search fixing its `raster:bands` metadata doesn't change the rule: the flag and
-baseline still decide. A catalog that harmonizes differently gets its own documented
-branch, backed by a pixel check.
+Earth Search fixing its `raster:bands` metadata or its flags doesn't change the rule: the
+flag and baseline still decide, and the check stays as a guard. A catalog that harmonizes
+differently gets its own documented branch, backed by a pixel check. A wrongly flagged
+pass found over a bright AOI would move the check from dark targets to a comparison with
+the AOI's other passes.
 
 ---
 

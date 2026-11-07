@@ -126,6 +126,13 @@ def test_backfill_end_to_end(client, aoi_polygon, make_scene, monkeypatch):
         make_scene("aug", acquired=datetime(2021, 8, 15, 9, tzinfo=UTC)),
         make_scene("sep_clear", acquired=datetime(2021, 9, 3, 9, tzinfo=UTC)),
         make_scene("sep_cloudy", scl_class=9, acquired=datetime(2021, 9, 8, 9, tzinfo=UTC)),
+        make_scene(  # no offset in the pixels, though the flag says there is (spike 5)
+            "sep_bad_flag",
+            band_value=150,
+            baseline="05.12",
+            offset_removed=False,
+            acquired=datetime(2021, 9, 13, 9, tzinfo=UTC),
+        ),
     ]
     monkeypatch.setattr(catalog, "search", lambda *a, **k: list(found))
     aoi_id = create(client, aoi_polygon).json()["id"]
@@ -134,12 +141,12 @@ def test_backfill_end_to_end(client, aoi_polygon, make_scene, monkeypatch):
 
     assert client.get(f"/aois/{aoi_id}/progress").json() == {
         "stage": "ready",
-        "done": 3,
-        "total": 3,
+        "done": 4,
+        "total": 4,
         "error": None,
     }
     detail = client.get(f"/aois/{aoi_id}").json()
-    assert (detail["scenes"], detail["clear_scenes"]) == (3, 2)
+    assert (detail["scenes"], detail["clear_scenes"]) == (4, 2)
     assert (detail["first_month"], detail["last_month"]) == ("2021-08-01", "2021-09-01")
     assert 0 < detail["bytes_read"] < detail["whole_files_bytes"]
     assert len(detail["corners"]) == 4
@@ -147,7 +154,7 @@ def test_backfill_end_to_end(client, aoi_polygon, make_scene, monkeypatch):
     timeline = client.get(f"/aois/{aoi_id}/timeline").json()
     assert [(m["month"], m["passes"], m["clear_scenes"], m["gap"]) for m in timeline] == [
         ("2021-08-01", 1, 1, False),
-        ("2021-09-01", 2, 1, False),
+        ("2021-09-01", 3, 1, False),
     ]
     tile_query = parse_qs(urlsplit(timeline[1]["tiles"]["true_color"]).query)
     assert tile_query["url"] == [f"/data/composites/{aoi_id}/2021-09_display.tif"]
@@ -155,11 +162,13 @@ def test_backfill_end_to_end(client, aoi_polygon, make_scene, monkeypatch):
     assert [p["ndvi"] for p in ndvi] == [0.0, 0.0]  # every test band reads 1500
 
     september = client.get(f"/aois/{aoi_id}/scenes", params={"month": "2021-09"}).json()
-    assert [(s["item_id"], s["read_status"]) for s in september] == [
-        ("sep_clear", "full"),
-        ("sep_cloudy", "scl"),
+    assert [(s["item_id"], s["read_status"], s["offset_suspect"]) for s in september] == [
+        ("sep_clear", "full", False),
+        ("sep_cloudy", "scl", False),
+        ("sep_bad_flag", "full", True),
     ]
     assert september[1]["images"] is None and september[1]["aoi_clear_frac"] == 0.0
+    assert september[2]["aoi_clear_frac"] == 0.0  # never clear, so never in a composite
     image = client.get(september[0]["images"]["ndvi"])
     assert image.status_code == 200 and image.headers["content-type"] == "image/png"
     with MemoryFile(image.content) as mem, mem.open() as png:

@@ -74,15 +74,18 @@ def backfill(aoi_id: int, model: masking.CloudModel | None = None) -> None:
         raise
 
 
-def _clear_fractions(ds, masks, grid: AOIGrid, cfg: PipelineConfig) -> dict[str, float]:
-    """SCL + model clear fraction of every pass with bands, in batches to bound memory."""
+def _mask_stats(ds, masks, grid: AOIGrid, cfg: PipelineConfig) -> dict[str, tuple[float, bool]]:
+    """SCL + model clear fraction and offset check of every pass with bands, in batches
+    to bound memory."""
     full = np.flatnonzero(ds["status"].values == "full")
-    out: dict[str, float] = {}
+    out: dict[str, tuple[float, bool]] = {}
     for batch in np.array_split(full, max(1, math.ceil(len(full) / MASK_BATCH))):
         sel = ds.isel(time=batch).load()
         clear = masking.clear_mask(sel, masking.model_classes_for(sel, masks), cfg.masking)
-        fracs = masking.clear_fraction(clear, grid.mask)
-        out.update(zip(sel["item_id"].values.tolist(), fracs.tolist(), strict=True))
+        fracs = masking.clear_fraction(clear, grid.mask).tolist()
+        suspect = masking.offset_suspect(sel, cfg.masking).tolist()
+        items = sel["item_id"].values.tolist()
+        out.update(zip(items, zip(fracs, suspect, strict=True), strict=True))
     return out
 
 
@@ -99,12 +102,15 @@ def sync_records(aoi_id: int, cfg: PipelineConfig, data_dir: Path) -> None:
     ds = cube.load(cube.cube_path(data_dir, key))
     masks = cube.load(masking.mask_path(data_dir, key))
     grid = cube.grid_of(ds)
-    combined = _clear_fractions(ds, masks, grid, cfg)
+    stats = _mask_stats(ds, masks, grid, cfg)
+    for item in (item for item, (_, suspect) in stats.items() if suspect):
+        logger.warning("AOI {}: {} left out, its offset flag contradicts its pixels", aoi_id, item)
 
     scenes = []
     for t in range(ds.sizes["time"]):
         item, status = str(ds["item_id"].values[t]), str(ds["status"].values[t])
         scl_frac = float(ds["clear_frac"].values[t])
+        clear_frac, suspect = stats.get(item, (None if math.isnan(scl_frac) else scl_frac, False))
         scenes.append(
             {
                 "aoi_id": aoi_id,
@@ -120,7 +126,8 @@ def sync_records(aoi_id: int, cfg: PipelineConfig, data_dir: Path) -> None:
                 "processing_baseline": str(ds["baseline"].values[t]),
                 "tile_cloud_pct": float(ds["tile_cloud_pct"].values[t]),
                 "read_status": status,
-                "aoi_clear_frac": combined.get(item, None if math.isnan(scl_frac) else scl_frac),
+                "aoi_clear_frac": clear_frac,
+                "offset_suspect": suspect,
                 "bytes_read": int(ds["bytes_read"].values[t]),
                 "full_bytes": int(ds["full_bytes"].values[t]),
             }

@@ -168,7 +168,63 @@ used it.
 Script: `spikes/offset_flag_check.py <suspect item> <reference item>` reads each item's red
 and SCL overviews (under 1 MB each).
 
-**Open question for ADR-003:** trust the flag less. Options: a pixel sanity check per pass
-(e.g. a large share of negative harmonized reflectance over SCL vegetation/bare pixels marks
-the pass suspect and keeps it out of composites), or treating late-ingested items by
-processing software version once more cases are known.
+### Follow-up: how often, and a per-pass check
+
+**The flag is wrong on a run of 2022 items and right on others.** Over the spike AOI,
+Earth Search holds 26 tile-36UUA items from 2022 at baseline 04.00 or later without
+`boa_offset_applied: true`. Dark targets settle each one: the 2nd percentile of
+min(blue, red) DN over pixels SCL calls vegetation, bare soil or water, tile-wide at 1/16
+resolution (`spikes/offset_dark_targets.py`). Clear land and water always have some pixels
+at 0–0.07 reflectance, so a few hundred DN means no offset and 1000+ DN means the offset
+is there. The items split by date:
+
+| Unflagged passes, tile 36UUA | Items | Judged (enough pixels) | Dark p2 | Offset in the pixels? |
+|---|---|---|---|---|
+| 25 Jan – 26 Feb 2022 | 12 | 6 | 1002–1369 DN | yes: the flag is right |
+| 18 Mar – 3 Nov 2022 | 14 | 11 | 3–366 DN | no: the flag is wrong |
+| `S2A_36UUA_20260707_0_L2A` (above) | 1 | 1 | 206 DN | no |
+
+For comparison, items flagged `true` that we sampled read 120–213 DN, and the `c1` item
+`S2B_T36UUA_20210815T085845_L2A` (offset in the pixels) reads 1161 DN. Planetary Computer,
+which keeps the offset, agrees pass by pass (same pixels, `--pc`):
+
+| Earth Search item (unflagged) | Earth Search dark p2 | Planetary Computer dark p2 |
+|---|---|---|
+| `S2B_36UUA_20220214_0_L2A` | 1074 | 1074 |
+| `S2A_36UUA_20220226_0_L2A` | 1108 | 1070 |
+| `S2A_36UUA_20220318_0_L2A` | 177 | 1147 |
+| `S2B_36UUA_20220601_0_L2A` | 141 | 1143 |
+
+So no metadata rule fits: "Earth Search never carries the offset" is wrong for February
+2022, and following the flag is wrong from March. A date window learned from one tile is a
+guess. Each pass is judged by its own pixels instead.
+
+**The check** (`masking.offset_suspect`, settings under `[masking]` in
+`config/pipeline.toml`): the same dark-target statistic, in reflectance after harmonizing,
+over the AOI window. Below −0.02 the offset was subtracted from pixels that didn't carry it.
+The pass gets no clear pixels, so no composite uses it, and it's recorded as
+`scenes.offset_suspect`. With fewer than 100 reference pixels the metadata is trusted.
+
+Calibration and validation over AOI windows, after harmonizing:
+
+| Passes | Count | Dark p2 (reflectance) | Flagged suspect |
+|---|---|---|---|
+| Correct: local cubes (spike AOI Jul–Nov 2026, Kyiv AOI Jun–Sep 2021) | 73 | 0.006 – 0.067 | 0 |
+| Correct: Kyiv AOI Jan–Aug 2022, 3 of them with the offset in the pixels | 31 | 0.002 – 0.133 | 0 |
+| Flag wrong: Kyiv AOI Mar–Aug 2022 | 7 | −0.085 – −0.048 | 7 |
+
+Without the check, the 7 would have reached composites. March and April 2022 hold 4 of
+them. Their composites would have lost about 0.05 of red reflectance and gained +0.18 and
++0.25 NDVI (median), with NDVI moving more than 0.1 over 72% and 87% of the AOI. That's a
+fake greening against the same months of any other year. Summer months, with more good
+passes to outvote one bad pass, moved by 0.002–0.004 in red.
+
+**Limits:**
+
+- Only an offset subtracted twice is caught. An offset left in looks like a bright
+  surface (one correct March pass reads 0.133), so that direction isn't checked. A new
+  catalog still needs its pixels checked against a known pass (ADR-003).
+- Over a bright AOI (desert, dense city) a wrongly flagged pass can read above −0.02 and
+  get through. Comparing each pass with its neighbours in the same AOI would catch that;
+  it isn't needed for any AOI so far.
+- A pass with fewer than 100 reference pixels in the AOI keeps its metadata.

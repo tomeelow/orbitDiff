@@ -257,6 +257,8 @@ AWS_NO_SIGN_REQUEST=YES
 **Deliverable:** `masking/` producing clear masks, plus a small report of how many residual-cloud scenes each method lets through.
 
 > **As built (2026-11-07):** `orbitdiff.masking` (SCL with no-data kept out of the dilation, OmniCloudMask v4.0 pinned in config, both dilated by `dilate_px`) and `orbitdiff mask --id <aoi>`, which runs the model only on passes it hasn't seen and stores its raw classes in `data/masks/<aoi>.zarr`. A composite refuses a pass with bands but no model output rather than quietly using SCL alone. `orbitdiff mask-report --id <aoi>` writes a contact sheet and a `passes.csv` to label; there are no labels yet, so the report doesn't yet say which method lets fewer cloudy scenes through. On the spike AOI (Jun–Sep 2021, 32 passes with bands) the model masks a further 12–22% of the AOI on 4 partly cloudy passes, mostly hazy cloud edges SCL leaves in.
+>
+> **Amended (2026-11-07, spike 5):** `clear_mask` also drops any pass whose offset flag contradicts its pixels (`masking.offset_suspect`: harmonized dark targets below −0.02). Such passes are recorded as `scenes.offset_suspect` and shown in the API's scene list. Earth Search flags some March–November 2022 items wrongly; left in, they shift those months' composites by up to +0.25 NDVI.
 
 ---
 
