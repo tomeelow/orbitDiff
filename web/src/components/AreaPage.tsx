@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { type AoiDetail, api, type Progress, type Scene } from "../api";
+import { type AoiDetail, api, type ChangeEvent, type Progress, type Scene } from "../api";
 import { type Theme, useLoad } from "../hooks";
+import { CATEGORY } from "../lib/changes";
 import { formatArea } from "../lib/format";
 import { compareNote, defaultPair, monthKey, monthLabel } from "../lib/months";
+import { ChangesCard, type Shown } from "./Changes";
 import { CompareMap, type Layer } from "./CompareMap";
 import { BackfillCard, MonthCard, StatsCard } from "./Panels";
 import { ndviRange, Timeline, type TimelineMonth } from "./Timeline";
@@ -16,7 +18,7 @@ export function AreaPage({ id, theme }: { id: number; theme: Theme }) {
   const [progress, setProgress] = useState<Progress | null>(null);
   const [updating, setUpdating] = useState(false);
   const area = detail.state === "done" ? detail.data : null;
-  const building = area !== null && area.stage !== "ready";
+  const running = area !== null && area.stage !== "ready"; // a backfill or an update
 
   useEffect(() => {
     if (area) document.title = `${area.name} — Orbit Diff`;
@@ -24,7 +26,7 @@ export function AreaPage({ id, theme }: { id: number; theme: Theme }) {
 
   // Poll the backfill until it settles, then reload the area with its archive.
   useEffect(() => {
-    if (!building) return;
+    if (!running) return;
     let live = true;
     const tick = () =>
       api.progress(id).then(
@@ -41,7 +43,7 @@ export function AreaPage({ id, theme }: { id: number; theme: Theme }) {
       live = false;
       window.clearInterval(timer);
     };
-  }, [building, id, reload]);
+  }, [running, id, reload]);
 
   const startBackfill = useCallback(async () => {
     setUpdating(true);
@@ -63,7 +65,12 @@ export function AreaPage({ id, theme }: { id: number; theme: Theme }) {
   if (detail.state === "loading") return <LoadingState label="Loading the area" />;
   if (detail.state === "error") return <ErrorState message={detail.message} onRetry={reload} />;
   const data = detail.data;
-  if (building) {
+  const status = running
+    ? (progress ?? { stage: data.stage, done: 0, total: 0, error: null })
+    : null;
+  // Until the first months exist there is nothing to browse; after that, updates run
+  // alongside the archive.
+  if (status && data.first_month === null) {
     return (
       <AreaLayout area={data}>
         <div className="stage">
@@ -78,16 +85,21 @@ export function AreaPage({ id, theme }: { id: number; theme: Theme }) {
           />
         </div>
         <aside className="panel">
-          <BackfillCard
-            progress={progress ?? { stage: data.stage, done: 0, total: 0, error: null }}
-            onRetry={startBackfill}
-          />
+          <BackfillCard progress={status} onRetry={startBackfill} />
           <StatsCard area={data} />
         </aside>
       </AreaLayout>
     );
   }
-  return <Archive area={data} theme={theme} onUpdate={startBackfill} updating={updating} />;
+  return (
+    <Archive
+      area={data}
+      theme={theme}
+      onUpdate={startBackfill}
+      updating={updating}
+      status={status}
+    />
+  );
 }
 
 function AreaLayout({
@@ -130,15 +142,17 @@ function Archive({
   theme,
   onUpdate,
   updating,
+  status,
 }: {
   area: AoiDetail;
   theme: Theme;
   onUpdate: () => void;
   updating: boolean;
+  status: Progress | null; // an update in progress
 }) {
   const [archive, reloadArchive] = useLoad(
     () => Promise.all([api.timeline(area.id), api.ndvi(area.id)]),
-    [area.id, area.last_month],
+    [area.id, area.last_month, area.scenes, area.clear_scenes], // what an update changes
   );
   const months: TimelineMonth[] = useMemo(() => {
     if (archive.state !== "done") return [];
@@ -157,6 +171,23 @@ function Archive({
   const [source, setSource] = useState<"composite" | "pass">("composite");
   const [passId, setPassId] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
+
+  const [events, reloadEvents] = useLoad(
+    () => api.events(area.id),
+    [area.id, area.last_month, area.scenes, area.clear_scenes],
+  );
+  const [shown, setShown] = useState<Shown>("alerts");
+  const [selected, setSelected] = useState<number | null>(null);
+  const changes = useMemo(() => {
+    const all = events.state === "done" ? events.data : [];
+    return shown === "alerts" ? all.filter((e) => e.alerts) : all;
+  }, [events, shown]);
+  // Months with a change on show, in the colour of the latest one's category.
+  const marks = useMemo(
+    () =>
+      new Map([...changes].reverse().map((e) => [monthKey(e.month), CATEGORY[e.category].color])),
+    [changes],
+  );
 
   // Default cursors once the months arrive, and again if they no longer exist.
   useEffect(() => {
@@ -219,6 +250,20 @@ function Archive({
     }, FRAME_MS);
     return () => window.clearTimeout(timer);
   }, [playing, pair, index, months, move]);
+
+  // A change opens on its comparison: A the month a year before, B the month it showed.
+  const selectChange = useCallback(
+    (event: ChangeEvent | null) => {
+      setSelected(event?.id ?? null);
+      if (!event) return;
+      setPlaying(false);
+      setSource("composite");
+      const before = monthKey(event.reference_month);
+      const after = monthKey(event.month);
+      setPair((p) => ({ a: index.has(before) ? before : (p?.a ?? before), b: after }));
+    },
+    [index],
+  );
 
   const togglePlay = useCallback(() => {
     if (!playing && pair && index.get(pair.b) === months.length - 1 && months[0])
@@ -312,6 +357,9 @@ function Archive({
           pass={chosenPass}
           next={next}
           theme={theme}
+          changes={changes}
+          selected={selected}
+          onPick={(id) => selectChange(changes.find((e) => e.id === id) ?? null)}
         />
         <p className={note.tone === "warn" || noPass ? "caption caption-warn" : "caption"}>
           {noPass
@@ -359,7 +407,13 @@ function Archive({
             </button>
           </div>
         </div>
-        <Timeline months={months} a={a.key} b={b.key} onPick={(key) => move(slot, key)} />
+        <Timeline
+          months={months}
+          a={a.key}
+          b={b.key}
+          marks={marks}
+          onPick={(key) => move(slot, key)}
+        />
         <p className="keys muted small">
           <kbd>←</kbd> <kbd>→</kbd> step cursor {slot}, <kbd>Shift</kbd> jumps a year, <kbd>A</kbd>{" "}
           <kbd>B</kbd> pick the cursor, <kbd>Space</kbd> plays.
@@ -367,7 +421,17 @@ function Archive({
       </section>
 
       <aside className="panel">
-        <StatsCard area={area} onUpdate={onUpdate} updating={updating} />
+        {status && <BackfillCard progress={status} onRetry={onUpdate} update />}
+        <StatsCard area={area} onUpdate={status ? undefined : onUpdate} updating={updating} />
+        <ChangesCard
+          areaId={area.id}
+          events={events}
+          shown={shown}
+          onShow={setShown}
+          selected={selected}
+          onSelect={selectChange}
+          onRetry={reloadEvents}
+        />
         <MonthCard
           month={b}
           passes={passes}

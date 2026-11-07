@@ -1,14 +1,22 @@
 import { type Map as MapLibreMap, NavigationControl, ScaleControl } from "maplibre-gl";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { type AoiDetail, type Month, pointReadout, type Scene, sceneImageUrl } from "../api";
+import {
+  type AoiDetail,
+  type ChangeEvent,
+  type Month,
+  pointReadout,
+  type Scene,
+  sceneImageUrl,
+} from "../api";
 import type { Theme } from "../hooks";
 import { formatLonLat, formatUtc } from "../lib/format";
-import { type Bounds, boundsOf } from "../lib/geo";
+import { type Bounds, boundsOf, type LonLat } from "../lib/geo";
 import { monthKey, monthLabel } from "../lib/months";
 import { intersect, tilesCovering, tileUrl } from "../lib/tiles";
 import {
   addOutline,
   createMap,
+  setChanges,
   setPassImage,
   setRaster,
   swapBasemap,
@@ -25,6 +33,9 @@ interface Props {
   pass: Scene | null; // B shows this pass instead of the monthly composite
   next: Month | null; // the timelapse's next frame, preloaded
   theme: Theme;
+  changes?: ChangeEvent[]; // footprints drawn on both months
+  selected?: number | null; // the change in focus: drawn filled, and the map fits it
+  onPick?: (id: number) => void; // a footprint was clicked
 }
 
 interface Readout {
@@ -35,7 +46,18 @@ interface Readout {
 }
 
 /** Month A on the left of the divider, month B on the right: two maps, one camera. */
-export function CompareMap({ area, a, b, layer, pass, next, theme }: Props) {
+export function CompareMap({
+  area,
+  a,
+  b,
+  layer,
+  pass,
+  next,
+  theme,
+  changes = [],
+  selected = null,
+  onPick,
+}: Props) {
   const aRef = useRef<HTMLDivElement>(null);
   const bRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
@@ -48,8 +70,8 @@ export function CompareMap({ area, a, b, layer, pass, next, theme }: Props) {
   const compare = a !== null;
 
   // What the hover handler needs, without re-binding it every render.
-  const live = useRef({ a, b, pass, split, compare });
-  live.current = { a, b, pass, split, compare };
+  const live = useRef({ a, b, pass, split, compare, onPick });
+  live.current = { a, b, pass, split, compare, onPick };
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: the maps are built once per area
   useEffect(() => {
@@ -102,6 +124,16 @@ export function CompareMap({ area, a, b, layer, pass, next, theme }: Props) {
         );
       }, 120);
     });
+    mapB.on("click", "od-changes-fill", (event) => {
+      const id = event.features?.[0]?.properties?.id;
+      if (typeof id === "number") live.current.onPick?.(id);
+    });
+    mapB.on("mouseenter", "od-changes-fill", () => {
+      mapB.getCanvas().style.cursor = "pointer";
+    });
+    mapB.on("mouseleave", "od-changes-fill", () => {
+      mapB.getCanvas().style.cursor = "";
+    });
     mapB.on("mouseout", () => {
       window.clearTimeout(timer);
       request?.abort();
@@ -140,6 +172,23 @@ export function CompareMap({ area, a, b, layer, pass, next, theme }: Props) {
       setPassImage(current.b, passUrl, area.corners);
     });
   }, [ready, aUrl, bUrl, passUrl, area.corners, bounds]);
+
+  useEffect(() => {
+    const current = maps.current;
+    if (!ready || !current) return;
+    for (const map of [current.a, current.b])
+      whenStyleReady(map, () => setChanges(map, changes, selected));
+  }, [ready, changes, selected]);
+
+  // Bring the selected change into view, with its surroundings.
+  const focus = changes.find((e) => e.id === selected)?.geometry;
+  useEffect(() => {
+    const map = maps.current?.b;
+    if (!ready || !map || !focus) return;
+    const rings = focus.type === "Polygon" ? [focus.coordinates] : focus.coordinates;
+    const points = rings.flatMap((polygon) => polygon.flat() as LonLat[]);
+    map.fitBounds(boundsOf(points), { padding: 96, maxZoom: 15, duration: 600 });
+  }, [ready, focus]);
 
   // Timelapse: fetch the next frame's tiles for the visible part of the area. Tile URLs are
   // versioned and served immutable, so the map then reads them from the browser cache.

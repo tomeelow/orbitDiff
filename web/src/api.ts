@@ -4,7 +4,14 @@ import type { LonLat, Polygon } from "./lib/geo";
 
 export const API_URL: string = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
 
-export type Stage = "queued" | "reading" | "masking" | "compositing" | "ready" | "failed";
+export type Stage =
+  | "queued"
+  | "reading"
+  | "masking"
+  | "compositing"
+  | "detecting"
+  | "ready"
+  | "failed";
 
 export interface AoiSummary {
   id: number;
@@ -62,6 +69,36 @@ export interface Scene {
   images: { true_color: string; ndvi: string } | null; // paths on the API
 }
 
+export type Category = "buildings_roads" | "vegetation_loss" | "solar_industry" | "water" | "other";
+
+export type EventStatus = "pending" | "confirmed" | "dismissed" | "seasonal";
+
+export interface StatusChange {
+  status: EventStatus;
+  cause: string; // the pass (STAC item id) or month that caused it
+  at: string; // UTC
+}
+
+/** One change, as the pipeline found it and followed it pass by pass. */
+export interface ChangeEvent {
+  id: number;
+  month: string; // the composite month it first showed in
+  reference_month: string; // the same month a year earlier
+  category: Category;
+  status: EventStatus;
+  area_ha: number;
+  geometry: Polygon | { type: "MultiPolygon"; coordinates: LonLat[][][] };
+  ndvi_before: number | null;
+  ndvi_after: number | null;
+  detected_utc: string;
+  status_utc: string;
+  history: StatusChange[];
+  items: string[];
+  method_version: string;
+  alerts: boolean; // under the area's alert rule, decided by the API
+  alert_reason: string;
+}
+
 export interface Limits {
   max_area_km2: number;
 }
@@ -104,7 +141,11 @@ export const api = {
   timeline: (id: number) => request<Month[]>(`/aois/${id}/timeline`),
   ndvi: (id: number) => request<NdviPoint[]>(`/aois/${id}/ndvi`),
   scenes: (id: number, month: string) => request<Scene[]>(`/aois/${id}/scenes?month=${month}`),
+  events: (id: number) => request<ChangeEvent[]>(`/aois/${id}/events`),
 };
+
+export const eventImageUrl = (areaId: number, eventId: number, side: "before" | "after") =>
+  `${API_URL}/aois/${areaId}/events/${eventId}/${side}.png`;
 
 export const sceneImageUrl = (path: string): string => `${API_URL}${path}`;
 

@@ -6,12 +6,15 @@ import numpy as np
 import pytest
 from shapely.geometry import box, mapping
 
+from orbitdiff.alerts import AlertRule
 from orbitdiff.config import pipeline_config
+from orbitdiff.detection import Event
 from orbitdiff.evaluation import (
     Alert,
     AoiRun,
     EvalAoi,
     Label,
+    alerts_from,
     load_eval_set,
     metrics,
     score,
@@ -106,3 +109,39 @@ def test_eval_files_load_and_any_edit_changes_the_version(tmp_path):
     assert site.evaluated_months == 96 - 12
     write("2020-03")
     assert load_eval_set(tmp_path)[1] != version
+
+
+def event(category="vegetation_loss", area_px=100, history=()) -> Event:
+    pixels = np.zeros((20, 20), bool)
+    pixels.flat[:area_px] = True
+    e = Event(
+        "production",
+        "2021-05",
+        "2020-05",
+        pixels,
+        SITE,
+        category,
+        0.8,
+        0.2,
+        np.datetime64("2021-05-05"),
+    )
+    for status, at in history:
+        e.set(status, "pass", np.datetime64(at))
+    return e
+
+
+def test_production_alerts_follow_the_rule_in_the_status_they_had_then():
+    rule = AlertRule(min_ha=0.5)
+    confirmed = event(history=[("pending", "2021-05-05"), ("confirmed", "2021-05-20")])
+    dismissed = event(history=[("pending", "2021-05-05"), ("dismissed", "2021-05-20")])
+    seasonal = event(category="water", history=[("seasonal", "2021-05-05")])
+    small = event(area_px=40, history=[("pending", "2021-05-05")])  # 0.4 ha
+    events = [confirmed, dismissed, seasonal, small]
+
+    when_pending = alerts_from(events, rule)
+    when_confirmed = alerts_from(events, rule, confirmed_only=True)
+
+    # Alerting on first sight tells users about the dismissed one too: a false alert.
+    assert [a.alerted for a in when_pending] == [np.datetime64("2021-05-05")] * 2
+    assert [a.alerted for a in when_confirmed] == [np.datetime64("2021-05-20")]
+    assert len(alerts_from(events)) == 4  # a bare detector: everything, when detected

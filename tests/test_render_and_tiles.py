@@ -4,6 +4,7 @@ from urllib.parse import parse_qs, urlsplit
 import numpy as np
 import pytest
 from rasterio.io import MemoryFile
+from shapely.geometry import box
 
 from orbitdiff import render, tiles
 from orbitdiff.config import REPO_ROOT
@@ -32,6 +33,20 @@ def test_png_round_trips_with_transparency():
     with MemoryFile(render.png(image)) as mem, mem.open() as src:
         assert (src.count, src.height, src.width) == (4, 3, 4)
         np.testing.assert_array_equal(src.read(4), np.eye(3, 4) * 255)
+
+
+def test_event_crops_frame_the_footprint_with_context_and_keep_pixels_square(grid):
+    values = np.full((4, grid.height, grid.width), 0.05, np.float32)
+    values[:, :, :10] = np.nan  # never observed: transparent, not black
+    left, top = grid.transform.c, grid.transform.f
+    # A 10 x 10 pixel event on the left edge, in the grid's UTM metres.
+    event = box(left, top - 600, left + 100, top - 500)
+
+    image = render.crop(values, grid, event)
+
+    # 24 px (the minimum) around its centre, clipped at the grid edge to 17, scaled x8.
+    assert image.shape == (24 * 8, 17 * 8, 4)
+    assert (image[:, : 10 * 8, 3] == 0).all() and (image[:, 10 * 8 :, 3] == 255).all()
 
 
 def test_composite_tile_urls_are_versioned_and_keep_xyz_placeholders():

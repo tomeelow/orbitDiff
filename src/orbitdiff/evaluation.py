@@ -24,6 +24,7 @@ from shapely.geometry import shape
 from shapely.geometry.base import BaseGeometry
 
 from orbitdiff import composites, masking
+from orbitdiff.alerts import AlertRule, default_rule, should_alert
 from orbitdiff.aoi import AOIGrid, make_grid, reproject
 from orbitdiff.config import EvaluationConfig, PipelineConfig
 from orbitdiff.detection import (
@@ -114,8 +115,22 @@ class Alert:
     alerted: np.datetime64
 
 
-def alerts_from(events: Iterable[Event]) -> list[Alert]:
-    return [Alert(e.footprint, e.category, e.month, e.detected) for e in events]
+def alerts_from(
+    events: Iterable[Event], rule: AlertRule | None = None, confirmed_only: bool = False
+) -> list[Alert]:
+    """What users would have been told, and when. Without a rule (a bare detector) every
+    event alerts when detected. With one, an event alerts when detected, or with
+    `confirmed_only` when confirmed, if the rule passes it in the status it had then."""
+    alerts = []
+    for e in events:
+        if rule is None:
+            alerts.append(Alert(e.footprint, e.category, e.month, e.detected))
+            continue
+        status = "confirmed" if confirmed_only else e.history[0][0]
+        at = e.first("confirmed") if confirmed_only else e.detected
+        if at is not None and should_alert(status, e.category, e.area_ha, rule)[0]:
+            alerts.append(Alert(e.footprint, e.category, e.month, at))
+    return alerts
 
 
 @dataclass(frozen=True)
@@ -302,7 +317,7 @@ def evaluate(
     version and whether every AOI in it is verified."""
     aois, version = load_eval_set(folder)
     chosen = {name: methods(cfg.detection)[name] for name in names}
-    runs: dict[str, list[AoiRun]] = {name: [] for name in chosen}
+    runs: dict[str, list[AoiRun]] = {}
     for aoi in aois:
         grid = make_grid(f"eval-{aoi.name}", aoi.geometry, cfg.aoi.max_km2)
         if fetch:
@@ -314,6 +329,10 @@ def evaluate(
         )
         for name, method in chosen.items():
             events = detect(stack, passes, grid, method, cfg.detection)
-            runs[name].append(AoiRun(aoi, labels, first_clear, tuple(alerts_from(events))))
+            rule = default_rule(cfg.alerts) if method.rules else None
+            policies = {name: False} | ({f"{name}, confirmed only": True} if method.rules else {})
+            for row, confirmed_only in policies.items():
+                alerts = tuple(alerts_from(events, rule, confirmed_only))
+                runs.setdefault(row, []).append(AoiRun(aoi, labels, first_clear, alerts))
     verified = bool(aois) and all(a.verified for a in aois)
     return {n: score(r, cfg.evaluation) for n, r in runs.items()}, version, verified

@@ -18,7 +18,7 @@ from shapely.geometry import mapping, shape
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
-from orbitdiff import cube, db, jobs, render, tiles
+from orbitdiff import alerts, composites, cube, db, jobs, render, tiles
 from orbitdiff.aoi import make_grid, reproject
 from orbitdiff.config import pipeline_config, settings
 
@@ -313,6 +313,76 @@ def scene_image(
         render.png(render.with_alpha(rgb, has_data)),
         media_type="image/png",
         headers={"Cache-Control": "public, max-age=31536000, immutable"},  # a pass never changes
+    )
+
+
+class StatusChange(BaseModel):
+    status: str
+    cause: str  # the pass (STAC item id) or month that caused it
+    at: datetime
+
+
+class EventOut(BaseModel):
+    id: int
+    month: date  # the composite month it first showed in
+    reference_month: date  # compared with: the same month a year earlier
+    category: str
+    status: str
+    area_ha: float
+    geometry: dict  # GeoJSON, EPSG:4326
+    ndvi_before: float | None
+    ndvi_after: float | None
+    detected_utc: datetime
+    status_utc: datetime
+    history: list[StatusChange]
+    items: list[str]
+    method_version: str
+    alerts: bool  # whether it alerts, in its current status, under the area's alert rule
+    alert_reason: str  # why not, when it doesn't: "seasonal", "category off", ...
+
+
+@app.get("/aois/{aoi_id}/events")
+def events(aoi_id: int, s: SessionDep) -> list[EventOut]:
+    """The AOI's changes, newest first, with their provenance and whether each alerts."""
+    _aoi(s, aoi_id)
+    rule = alerts.default_rule(pipeline_config().alerts)
+    rows = s.scalars(
+        select(db.Event).where(db.Event.aoi_id == aoi_id).order_by(db.Event.detected_utc.desc())
+    )
+    out = []
+    for e in rows:
+        ok, why = alerts.should_alert(e.status, e.category, e.area_ha, rule)
+        fields = {c: getattr(e, c) for c in EventOut.model_fields if hasattr(db.Event, c)}
+        out.append(
+            EventOut(
+                **fields | {"geometry": mapping(to_shape(e.geometry))},
+                alerts=ok,
+                alert_reason=why,
+            )
+        )
+    return out
+
+
+@app.get("/aois/{aoi_id}/events/{event_id}/{side}.png")
+def event_image(
+    aoi_id: int, event_id: int, side: Literal["before", "after"], s: SessionDep
+) -> Response:
+    """True colour around an event from the composite on that side of the comparison.
+    Pixels no clear pass saw stay transparent: nothing is filled in."""
+    aoi = _aoi(s, aoi_id)
+    event = s.get(db.Event, event_id)
+    if event is None or event.aoi_id != aoi_id:
+        raise HTTPException(404, "no such event")
+    month = event.reference_month if side == "before" else event.month
+    path = composites.composite_dir(settings().data_dir, str(aoi_id)) / f"{month:%Y-%m}.tif"
+    if not path.exists():
+        raise HTTPException(404, "no composite for that month")
+    grid = jobs.grid_for(aoi)
+    area = reproject(to_shape(event.geometry), 4326, grid.epsg)
+    image = render.crop(composites.read_composite(path), grid, area)
+    # A composite is recomputed when its masks or settings change, so no immutable here.
+    return Response(
+        render.png(image), media_type="image/png", headers={"Cache-Control": "max-age=3600"}
     )
 
 

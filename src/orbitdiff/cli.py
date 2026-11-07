@@ -56,6 +56,8 @@ def _evaluate(args: argparse.Namespace) -> None:
     reports, version, verified = evaluation.evaluate(
         args.method, cfg, settings().data_dir, args.eval_dir, fetch=args.fetch
     )
+    if not reports:
+        raise SystemExit(f"No labelled AOIs in {args.eval_dir}: see eval/README.md")
     print(f"Evaluation set {version}" + ("" if verified else " (labels NOT verified)"))
     print(evaluation.table(reports))
     if args.no_mlflow:
@@ -109,7 +111,9 @@ def main(argv: list[str] | None = None) -> None:
     comp.set_defaults(run=_composites)
 
     ev = sub.add_parser("evaluate", help="score detection methods on the evaluation set")
-    ev.add_argument("--method", nargs="+", default=["naive"], help="methods to score")
+    ev.add_argument(
+        "--method", nargs="+", default=["naive", "cva", "bfast", "production"], help="methods"
+    )
     ev.add_argument("--eval-dir", type=Path, default=REPO_ROOT / "eval")
     ev.add_argument("--fetch", action="store_true", help="read and composite missing imagery")
     ev.add_argument("--no-mlflow", action="store_true", help="print only, log nothing")

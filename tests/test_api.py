@@ -8,6 +8,7 @@ import os
 from datetime import UTC, datetime
 from urllib.parse import parse_qs, urlsplit
 
+import numpy as np
 import pytest
 from alembic import command
 from alembic.autogenerate import compare_metadata
@@ -18,7 +19,8 @@ from rasterio.io import MemoryFile
 from shapely.geometry import box, mapping
 from sqlalchemy import create_engine, text
 
-from orbitdiff import api, catalog, db, jobs
+from orbitdiff import api, catalog, db, detection, jobs
+from orbitdiff.aoi import make_grid
 from orbitdiff.config import REPO_ROOT, pipeline_config, settings
 
 TEST_DB = os.environ.get("ORBITDIFF_TEST_DATABASE_URL")
@@ -206,3 +208,116 @@ def test_health_reports_what_is_down(client):
     api.app.dependency_overrides[api.get_redis] = lambda: FakeRedis(up=False)
     r = client.get("/health")
     assert r.status_code == 503 and r.json()["queue"].startswith("down")
+
+
+def test_events_are_reconciled_never_duplicated_or_deleted(client, aoi_polygon, monkeypatch):
+    aoi_id = create(client, aoi_polygon).json()["id"]
+    grid = make_grid(str(aoi_id), aoi_polygon, max_km2=10)
+    seen = np.datetime64("2021-05-05T09:00")
+
+    def clearing(rows: slice, *statuses: tuple[str, str, str]) -> detection.Event:
+        pixels = np.zeros((grid.height, grid.width), bool)
+        pixels[rows, 10:30] = True
+        e = detection.Event(
+            "production",
+            "2021-05",
+            "2020-05",
+            pixels,
+            detection.footprint(pixels, grid),
+            "vegetation_loss",
+            0.82,
+            0.18,
+            seen,
+        )
+        for status, cause, at in statuses:
+            e.set(status, cause, np.datetime64(at))
+        return e
+
+    found: list[detection.Event] = []
+    monkeypatch.setattr(detection, "load_stack", lambda *a, **k: None)
+    monkeypatch.setattr(detection, "Passes", lambda *a, **k: None)
+    monkeypatch.setattr(detection, "detect", lambda *a, **k: list(found))
+
+    def sync() -> list[dict]:
+        jobs.sync_events(aoi_id, pipeline_config(), settings().data_dir)
+        return client.get(f"/aois/{aoi_id}/events").json()
+
+    found[:] = [clearing(slice(10, 20), ("pending", "S2A_a", "2021-05-05T09:00"))]
+    (first,) = sync()
+    assert (first["status"], first["category"], first["area_ha"]) == (
+        "pending",
+        "vegetation_loss",
+        2.0,
+    )
+    assert first["month"] == "2021-05-01" and first["reference_month"] == "2020-05-01"
+    assert first["history"][0]["cause"] == "S2A_a"
+    assert first["geometry"]["type"] == "Polygon"
+    assert first["method_version"].startswith("production-")
+    assert (first["alerts"], first["alert_reason"]) == (True, "alert")  # 2 ha of forest gone
+
+    # A new pass confirms it and its footprint grows a row: the same event, updated.
+    found[:] = [
+        clearing(
+            slice(10, 21),
+            ("pending", "S2A_a", "2021-05-05T09:00"),
+            ("confirmed", "S2B_b", "2021-05-08T09:00"),
+        )
+    ]
+    (second,) = sync()
+    assert second["id"] == first["id"]
+    assert (second["status"], second["area_ha"]) == ("confirmed", 2.2)
+    assert second["status_utc"].startswith("2021-05-08")
+
+    # Settings change and it is no longer found: dismissed, and its record kept.
+    found[:] = []
+    (third,) = sync()
+    assert (third["id"], third["status"]) == (first["id"], "dismissed")
+    assert third["history"][-1]["cause"] == "no longer detected"
+    assert (third["alerts"], third["alert_reason"]) == (False, "dismissed")
+
+
+def test_a_recomputed_event_keeps_its_own_row_not_a_stale_neighbour(
+    client, aoi_polygon, monkeypatch
+):
+    aoi_id = create(client, aoi_polygon).json()["id"]
+    grid = make_grid(str(aoi_id), aoi_polygon, max_km2=10)
+
+    def event(rows: slice) -> detection.Event:
+        pixels = np.zeros((grid.height, grid.width), bool)
+        pixels[rows, 10:30] = True
+        e = detection.Event(
+            "production",
+            "2021-05",
+            "2020-05",
+            pixels,
+            detection.footprint(pixels, grid),
+            "vegetation_loss",
+            0.8,
+            0.2,
+            np.datetime64("2021-05-05T09:00"),
+        )
+        e.set("pending", "S2A_a", np.datetime64("2021-05-05T09:00"))
+        return e
+
+    found: list[detection.Event] = []
+    monkeypatch.setattr(detection, "load_stack", lambda *a, **k: None)
+    monkeypatch.setattr(detection, "Passes", lambda *a, **k: None)
+    monkeypatch.setattr(detection, "detect", lambda *a, **k: list(found))
+
+    def sync() -> dict[int, dict]:
+        jobs.sync_events(aoi_id, pipeline_config(), settings().data_dir)
+        return {e["id"]: e for e in client.get(f"/aois/{aoi_id}/events").json()}
+
+    found[:] = [event(slice(21, 31))]
+    (stale,) = sync()  # stored first, so it comes first when rows are scanned
+    found[:] = [event(slice(10, 20))]
+    events = sync()
+    (own,) = set(events) - {stale}
+    assert events[stale]["history"][-1]["cause"] == "no longer detected"
+
+    # It grows a row and now touches the stale footprint: it still keeps its own row.
+    found[:] = [event(slice(10, 21))]
+    events = sync()
+    assert set(events) == {stale, own}
+    assert (events[own]["status"], events[own]["area_ha"]) == ("pending", 2.2)
+    assert events[stale]["status"] == "dismissed"

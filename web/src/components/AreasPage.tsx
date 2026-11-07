@@ -9,6 +9,7 @@ const STAGE: Record<Stage, string> = {
   reading: "reading passes",
   masking: "masking clouds",
   compositing: "building composites",
+  detecting: "finding changes",
   ready: "ready",
   failed: "backfill failed",
 };

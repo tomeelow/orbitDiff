@@ -54,14 +54,18 @@ polygon → STAC search → windowed COG reads → cloud masking → monthly com
    empty pixels from the nearest clear months and flag them. One code path serves both the
    archive backfill and pass-by-pass updates; a test checks the two give byte-identical
    files.
-6. **Detect** *(planned)*: a naive NDVI-difference baseline first, then CVA and BFAST on
-   anniversary composites, and a Siamese U-Net for buildings. Every detector is reported
+6. **Detect.** A naive NDVI-drop baseline, change vector analysis on anniversary
+   composites, and a BFAST-style season-and-trend fit per pixel; production runs all three
+   with the rules below. A Siamese U-Net for buildings is next. Every detector is reported
    against the baseline, by category and by hard case (cropland, floodplain, snow).
-7. **Confirm and alert** *(planned)*: events go `pending` → `confirmed` or `dismissed` on
-   the next clear pass; seasonal ones are labelled, not deleted. Emails carry before/after
-   crops, size, method, confidence, status and a signed "Not a real change" link. That
-   feedback is the precision signal and training data, and every event records the STAC
-   items, months, detector version and thresholds it came from.
+7. **Confirm.** A change must show in a single clear pass, not only in a monthly median.
+   It starts `pending`; the next clear pass over its footprint makes it `confirmed` or
+   `dismissed`. It is `seasonal` (labelled, never deleted) if snow covers it, if the place
+   looked like this in the same month of an earlier year (floods, crop rotations), or if
+   it reverts within three months. Every event records the passes, months, method version
+   and thresholds it came from.
+8. **Alert** *(planned)*: emails with before/after crops, size, method, status and a signed
+   "Not a real change" link. That feedback is the precision signal and training data.
 
 ## Status
 
@@ -74,7 +78,8 @@ polygon → STAC search → windowed COG reads → cloud masking → monthly com
 | 4. API, background backfills, map tiles | done |
 | 5. Web app: draw an AOI, browse the archive | done |
 | 6. Evaluation harness and naive baseline (labels still to verify) | done |
-| 7–8. Classical detectors and events, U-Net for buildings | next |
+| 7. Classical detectors, events and statuses (thresholds provisional) | done |
+| 8. U-Net for buildings | next |
 | 9–10. Watching, alerts, feedback, monitoring | planned |
 | 11–12. Deployment, documentation | planned |
 

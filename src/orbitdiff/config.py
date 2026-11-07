@@ -99,8 +99,19 @@ class DetectionConfig(_Section):
     confirm_on_next_clear: bool
     footprint_clear_frac: float = Field(gt=0, le=1)
     agree_frac: float = Field(gt=0, le=1)
+    snow_frac: float = Field(gt=0, le=1)
     ndvi_drop: float = Field(gt=0)
+    cva_magnitude: float = Field(gt=0)
+    seasonal_history_years: int = Field(ge=1)
+    seasonal_harmonics: int = Field(ge=1)
+    seasonal_min_months: int = Field(ge=1)
+    seasonal_sigmas: float = Field(gt=0)
+    seasonal_min_sigma: float = Field(gt=0)
     categories: CategoryConfig
+
+
+class AlertsConfig(_Section):
+    default_min_ha: float = Field(gt=0)
 
 
 class EvaluationConfig(_Section):
@@ -124,6 +135,7 @@ class PipelineConfig(_Section):
     masking: MaskingConfig
     composites: CompositesConfig
     detection: DetectionConfig
+    alerts: AlertsConfig
     evaluation: EvaluationConfig
     jobs: JobsConfig
     schedule: ScheduleConfig
