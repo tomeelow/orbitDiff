@@ -22,6 +22,7 @@ def composite_urls(aoi_id: int, month: date, version: str) -> dict[str, str]:
     s = settings()
     cog = f"{s.titiler_data_dir}/composites/{aoi_id}/{month:%Y-%m}_display.tif"
     red, nir = _band("red"), _band("nir")
+    ndvi = f"({nir}-{red})/({nir}+{red})"
 
     def url(path: str, **params: object) -> str:
         return f"{s.titiler_url}{path}?" + urlencode(
@@ -37,11 +38,15 @@ def composite_urls(aoi_id: int, month: date, version: str) -> dict[str, str]:
         ),
         "ndvi": url(
             XYZ,
-            expression=f"({nir}-{red})/({nir}+{red})",
+            expression=ndvi,
             rescale=f"{render.NDVI_MIN},{render.NDVI_MAX}",
             colormap_name=render.NDVI_COLORMAP,
             tilesize=512,
         ),
-        # Hover readout. Values are reflectance x SCALE in DISPLAY_BANDS order.
-        "point": url("/cog/point/{lon},{lat}"),
+        # Hover readout: values are [NDVI, 1 if the pixel was filled for display else 0].
+        # Overriding nodata (0) keeps unfilled pixels (filled = 0) from masking the NDVI;
+        # 65535 is reflectance 6.5, which no surface reaches.
+        "point": url(
+            "/cog/point/{lon},{lat}", expression=f"{ndvi};{_band('filled')}", nodata=65535
+        ),
     }

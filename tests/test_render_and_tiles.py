@@ -43,4 +43,6 @@ def test_composite_tile_urls_are_versioned_and_keep_xyz_placeholders():
     assert (q["bidx"], q["rescale"], q["v"]) == (["3", "2", "1"], ["0,3000"], ["abc123"])
     ndvi = parse_qs(urlsplit(urls["ndvi"]).query)
     assert ndvi["expression"] == ["(b4-b3)/(b4+b3)"] and ndvi["colormap_name"] == ["orbitdiff_ndvi"]
-    assert "/cog/point/{lon},{lat}" in urls["point"]
+    point = urlsplit(urls["point"])
+    assert point.path == "/cog/point/{lon},{lat}"
+    assert parse_qs(point.query)["expression"] == ["(b4-b3)/(b4+b3);b5"]

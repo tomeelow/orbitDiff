@@ -368,3 +368,33 @@ four corners. Composite months still go through TiTiler.
 
 AOIs large enough that a single image is too heavy, or a need to show bands the cube
 doesn't hold.
+
+## ADR-011 — OpenFreeMap basemap, and swipe as two synced maps
+
+**Status:** accepted · **Date:** 2026-11-07
+
+### Context
+
+The web app needs a basemap under the AOI's imagery, in a dark and a light style, and a
+way to compare month A with month B side by side.
+
+### Decision
+
+- The basemap is OpenStreetMap data served as vector tiles by OpenFreeMap (`dark` and
+  `positron` styles), with no key. `VITE_BASEMAP_DARK` and `VITE_BASEMAP_LIGHT` point it
+  elsewhere. Only the basemap comes from there; every pixel of imagery comes from our API
+  and TiTiler.
+- Swipe A/B is two MapLibre maps stacked and kept in step. The top one shows A and is
+  clipped at the divider; the bottom one shows B and takes all input.
+
+### Reasoning
+
+- No key and no account means no secret in the web bundle and nothing to set up locally.
+- Two maps keep each month in its own layer stack, so A and B can differ in source (a
+  composite against a single pass) without per-layer clipping, which MapLibre doesn't
+  offer.
+
+### What would change our mind
+
+OpenFreeMap's terms or availability changing, or deployment needing a basemap we host
+ourselves (Protomaps on object storage is the likely swap; only the two URLs change).

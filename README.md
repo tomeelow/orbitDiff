@@ -72,8 +72,8 @@ polygon → STAC search → windowed COG reads → cloud masking → monthly com
 | 2. Cloud masking: SCL plus OmniCloudMask | done |
 | 3. Monthly median composites as COGs | done |
 | 4. API, background backfills, map tiles | done |
-| 5. Web app: draw an AOI, browse the archive | next |
-| 6–8. Evaluation set, classical detectors, U-Net for buildings | planned |
+| 5. Web app: draw an AOI, browse the archive | done |
+| 6–8. Evaluation set, classical detectors, U-Net for buildings | next |
 | 9–10. Watching, alerts, feedback, monitoring | planned |
 | 11–12. Deployment, documentation | planned |
 
@@ -85,7 +85,8 @@ polygon → STAC search → windowed COG reads → cloud masking → monthly com
   OmniCloudMask in a separate `ml` dependency group.
 - **Backend:** FastAPI, Postgres + PostGIS (SQLAlchemy, GeoAlchemy2, Alembic), RQ on
   Redis for backfill jobs, TiTiler for composite map tiles.
-- **Web app** *(Phase 5)*: React and MapLibre.
+- **Web app:** Vite, React and TypeScript, MapLibre with Terra Draw, an OpenFreeMap
+  basemap; Biome, Vitest, pnpm.
 - **Tooling:** uv, ruff, pytest, pre-commit, GitHub Actions.
 
 ## Running it locally
@@ -114,6 +115,15 @@ curl -X POST localhost:8000/aois -H 'content-type: application/json' \
 Then follow `/aois/{id}/progress`, and browse `/aois/{id}/timeline`, `/ndvi` and
 `/scenes?month=YYYY-MM`. Timeline entries carry TiTiler tile URLs for true colour and NDVI.
 
+Or in the web app (Node 22.12+ and pnpm), with the API and a worker running:
+
+```bash
+cd web && pnpm install && pnpm dev   # http://localhost:5173
+```
+
+Draw an area, watch its backfill, then step through the archive with A/B swipe, NDVI and
+single passes. `web/.env.example` lists the API and basemap URLs it reads.
+
 Or step by step from the command line, with no database:
 
 ```bash
@@ -138,6 +148,7 @@ committed. AOIs are capped at 10 km².
 
 ```bash
 uv run pytest
+cd web && pnpm check && pnpm test   # Biome, Vitest
 ```
 
 Tests run offline. Rasters are small synthetic GeoTIFFs with staged changes, and sockets
@@ -149,6 +160,7 @@ PostGIS service.
 
 ```
 src/orbitdiff/   pipeline, API and jobs
+web/             the web app
 tests/           unit and end-to-end tests
 config/          pipeline.toml
 migrations/      Alembic migrations
