@@ -887,6 +887,110 @@ kbd {
   margin-bottom: var(--space-3xs);
 }
 
+.change-feedback {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs);
+  margin-top: var(--space-sm);
+}
+
+/* ---- alert rule ---- */
+input[type="checkbox"],
+input[type="range"] {
+  accent-color: var(--color-accent);
+}
+.check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-height: 32px;
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-ink);
+  cursor: pointer;
+}
+.check input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+.check .change-dot {
+  margin: 0;
+}
+.check-lead {
+  font-weight: 500;
+}
+.rule-note {
+  margin: 0 0 var(--space-xs) calc(16px + var(--space-xs));
+}
+.checks {
+  margin: var(--space-md) 0 var(--space-sm);
+  padding: 0;
+  border: 0;
+}
+.checks legend {
+  margin-bottom: var(--space-2xs);
+  padding: 0;
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+}
+.slider {
+  margin-top: var(--space-md);
+}
+.slider-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.slider-head label {
+  margin: 0;
+}
+.slider input {
+  width: 100%;
+  margin: var(--space-2xs) 0 0;
+}
+.slider-ends {
+  display: flex;
+  justify-content: space-between;
+}
+.rule-preview {
+  margin-top: var(--space-md);
+  padding: var(--space-sm) 0;
+  border-block: var(--rule-hair) solid var(--color-rule-2);
+  font-size: var(--text-sm);
+  color: var(--color-ink-2);
+}
+.rule-preview[data-stale] {
+  opacity: 0.55;
+  transition: opacity var(--dur-short) var(--ease-out);
+}
+.rule .actions {
+  align-items: center;
+}
+
+/* ---- account ---- */
+.account {
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.signin {
+  max-width: 34rem;
+  padding: var(--space-xl) 0;
+}
+.signin h1 {
+  margin-bottom: var(--space-md);
+}
+.signin p + p {
+  margin-top: var(--space-sm);
+}
+.area-name .tag {
+  margin-left: var(--space-xs);
+  vertical-align: 0.15em;
+}
+
 .progress {
   position: relative;
   height: 4px;
@@ -968,6 +1072,9 @@ kbd {
 @media (max-width: 40rem) {
   .bar {
     gap: var(--space-sm);
+  }
+  .account {
+    display: none;
   }
   .bar nav {
     display: none;

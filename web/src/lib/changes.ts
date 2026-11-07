@@ -21,9 +21,13 @@ export const STATUS: Record<EventStatus, string> = {
   seasonal: "Seasonal",
 };
 
-/** The API's alert verdict ("alert", "seasonal", "under 0.5 ha", ...) as a tag. */
-export function alertText(event: Pick<ChangeEvent, "alerts" | "alert_reason">): string {
-  if (event.alerts) return "Would alert";
+/** The API's alert verdict ("alert", "seasonal", "under 0.5 ha", ...) as a tag. An event that
+alerted and was later dismissed or found seasonal is a false alarm someone would have got. */
+export function alertText(event: Pick<ChangeEvent, "alerts" | "alert_reason" | "status">): string {
+  if (event.alerts)
+    return event.status === "dismissed" || event.status === "seasonal"
+      ? "Would alert, then retract"
+      : "Would alert";
   const reason = event.alert_reason;
   if (reason === "category off") return "Category not watched";
   if (reason === "alerts off") return "Alerts off";

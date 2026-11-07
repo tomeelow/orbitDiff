@@ -1,30 +1,42 @@
-"""The REST API the web app talks to (Phase 4). Run: `uv run uvicorn orbitdiff.api:app`.
+"""The REST API the web app talks to. Run: `uv run uvicorn orbitdiff.api:app`.
 
-Accounts arrive in Phase 9. Until then every AOI is visible to every caller, so this
-must not be exposed beyond a development machine.
+Every AOI endpoint needs a signed-in user and answers only for that user's own AOIs: any
+other AOI is a 404, never a 403, so ids don't reveal what exists. The map tiles TiTiler
+serves are not behind this yet (Phase 11), so this must not be exposed beyond a
+development machine.
 """
 
+import base64
+import html
 from collections.abc import Callable, Iterator
 from datetime import UTC, date, datetime
 from typing import Annotated, Literal
 
 import numpy as np
-from fastapi import Depends, FastAPI, HTTPException, Query, Response
+from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, RedirectResponse
 from geoalchemy2.shape import from_shape, to_shape
+from loguru import logger
 from pydantic import BaseModel, Field
 from redis import Redis
 from shapely.geometry import mapping, shape
 from sqlalchemy import func, select, text
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from orbitdiff import alerts, composites, cube, db, jobs, render, tiles
+from orbitdiff import accounts, alerts, cube, db, jobs, mail, notify, render, tiles
 from orbitdiff.aoi import make_grid, reproject
 from orbitdiff.config import pipeline_config, settings
+from orbitdiff.detection import CATEGORIES
 
 app = FastAPI(title="Orbit Diff")
 app.add_middleware(
-    CORSMiddleware, allow_origins=settings().cors_origins, allow_methods=["*"], allow_headers=["*"]
+    CORSMiddleware,
+    allow_origins=settings().cors_origins,
+    allow_credentials=True,  # the session cookie
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -42,6 +54,17 @@ def get_redis() -> Redis:
 
 
 SessionDep = Annotated[Session, Depends(get_session)]
+SessionCookie = Annotated[str | None, Cookie(alias=accounts.COOKIE)]
+
+
+def current_user(s: SessionDep, token: SessionCookie = None) -> db.User:
+    user = accounts.user_for_session(s, token) if token else None
+    if user is None:
+        raise HTTPException(401, "sign in first")
+    return user
+
+
+UserDep = Annotated[db.User, Depends(current_user)]
 
 
 class Polygon(BaseModel):
@@ -59,6 +82,7 @@ class AoiSummary(BaseModel):
     name: str
     area_ha: float
     stage: str
+    alerts_on: bool
 
 
 class AoiDetail(AoiSummary):
@@ -117,20 +141,34 @@ def limits() -> Limits:
     return Limits(max_area_km2=pipeline_config().aoi.max_km2)
 
 
-def _aoi(s: Session, aoi_id: int) -> db.Aoi:
+def _aoi(s: Session, aoi_id: int, user: db.User) -> db.Aoi:
     aoi = s.get(db.Aoi, aoi_id)
-    if aoi is None:
+    if aoi is None or aoi.user_id != user.id:
         raise HTTPException(404, "no such AOI")
     return aoi
 
 
-def _summary(aoi: db.Aoi) -> AoiSummary:
-    return AoiSummary(id=aoi.id, name=aoi.name, area_ha=round(aoi.area_ha, 2), stage=aoi.stage)
+def _summary(aoi: db.Aoi, alerts_on: bool) -> AoiSummary:
+    return AoiSummary(
+        id=aoi.id,
+        name=aoi.name,
+        area_ha=round(aoi.area_ha, 2),
+        stage=aoi.stage,
+        alerts_on=alerts_on,
+    )
+
+
+def _alerts_on(s: Session, aoi_id: int) -> bool:
+    rule = s.get(db.AlertRule, aoi_id)
+    return rule is not None and rule.enabled
 
 
 @app.post("/aois", status_code=201)
 def create_aoi(
-    body: AoiCreate, s: SessionDep, enqueue: Annotated[Callable, Depends(get_enqueue)]
+    body: AoiCreate,
+    s: SessionDep,
+    user: UserDep,
+    enqueue: Annotated[Callable, Depends(get_enqueue)],
 ) -> AoiSummary:
     cfg = pipeline_config()
     try:
@@ -138,6 +176,7 @@ def create_aoi(
     except ValueError as exc:  # not a valid polygon, or over the size cap
         raise HTTPException(422, str(exc)) from exc
     aoi = db.Aoi(
+        user_id=user.id,
         name=body.name,
         geometry=from_shape(grid.geometry, srid=4326),
         epsg=grid.epsg,
@@ -150,18 +189,20 @@ def create_aoi(
     s.add(aoi)
     s.commit()
     enqueue(aoi.id)
-    return _summary(aoi)
+    return _summary(aoi, alerts_on=False)
 
 
 @app.get("/aois")
-def list_aois(s: SessionDep) -> list[AoiSummary]:
-    return [_summary(a) for a in s.scalars(select(db.Aoi).order_by(db.Aoi.id))]
+def list_aois(s: SessionDep, user: UserDep) -> list[AoiSummary]:
+    watched = set(s.scalars(select(db.AlertRule.aoi_id).where(db.AlertRule.enabled)))
+    rows = s.scalars(select(db.Aoi).where(db.Aoi.user_id == user.id).order_by(db.Aoi.id))
+    return [_summary(a, a.id in watched) for a in rows]
 
 
 @app.get("/aois/{aoi_id}")
-def get_aoi(aoi_id: int, s: SessionDep) -> AoiDetail:
-    aoi = _aoi(s, aoi_id)
-    grid = jobs.grid_for(aoi)
+def get_aoi(aoi_id: int, s: SessionDep, user: UserDep) -> AoiDetail:
+    aoi = _aoi(s, aoi_id, user)
+    grid = aoi.grid()
     left, bottom, right, top = grid.bounds
     corners = reproject(
         shape(
@@ -186,7 +227,7 @@ def get_aoi(aoi_id: int, s: SessionDep) -> AoiDetail:
         select(func.min(db.Month.month), func.max(db.Month.month)).where(db.Month.aoi_id == aoi_id)
     ).one()
     return AoiDetail(
-        **_summary(aoi).model_dump(),
+        **_summary(aoi, _alerts_on(s, aoi_id)).model_dump(),
         geometry=mapping(to_shape(aoi.geometry)),
         corners=[(round(p.x, 7), round(p.y, 7)) for p in corners.geoms],
         archive_start=aoi.archive_start,
@@ -201,35 +242,37 @@ def get_aoi(aoi_id: int, s: SessionDep) -> AoiDetail:
 
 @app.post("/aois/{aoi_id}/backfill", status_code=202)
 def rerun_backfill(
-    aoi_id: int, s: SessionDep, enqueue: Annotated[Callable, Depends(get_enqueue)]
+    aoi_id: int,
+    s: SessionDep,
+    user: UserDep,
+    enqueue: Annotated[Callable, Depends(get_enqueue)],
 ) -> Progress:
     """Retry a failed backfill, or pick up passes since the last one."""
-    aoi = _aoi(s, aoi_id)
-    if aoi.stage not in ("ready", "failed"):
+    aoi = _aoi(s, aoi_id, user)
+    if not jobs.claim_backfill(s, aoi_id):
         raise HTTPException(409, f"backfill already {aoi.stage}")
-    aoi.stage, aoi.error = "queued", None
     s.commit()
-    enqueue(aoi.id)
-    return Progress(stage=aoi.stage, done=0, total=0, error=None)
+    enqueue(aoi_id)
+    return Progress(stage="queued", done=0, total=0, error=None)
 
 
 @app.get("/aois/{aoi_id}/progress")
-def progress(aoi_id: int, s: SessionDep) -> Progress:
-    aoi = _aoi(s, aoi_id)
+def progress(aoi_id: int, s: SessionDep, user: UserDep) -> Progress:
+    aoi = _aoi(s, aoi_id, user)
     return Progress(
         stage=aoi.stage, done=aoi.progress_done, total=aoi.progress_total, error=aoi.error
     )
 
 
-def _months(s: Session, aoi_id: int) -> list[db.Month]:
-    _aoi(s, aoi_id)
+def _months(s: Session, aoi_id: int, user: db.User) -> list[db.Month]:
+    _aoi(s, aoi_id, user)
     return list(
         s.scalars(select(db.Month).where(db.Month.aoi_id == aoi_id).order_by(db.Month.month))
     )
 
 
 @app.get("/aois/{aoi_id}/timeline")
-def timeline(aoi_id: int, s: SessionDep) -> list[MonthOut]:
+def timeline(aoi_id: int, s: SessionDep, user: UserDep) -> list[MonthOut]:
     return [
         MonthOut(
             month=m.month,
@@ -241,15 +284,15 @@ def timeline(aoi_id: int, s: SessionDep) -> list[MonthOut]:
             gap=m.observed_frac == 0,
             tiles=tiles.composite_urls(aoi_id, m.month, m.version),
         )
-        for m in _months(s, aoi_id)
+        for m in _months(s, aoi_id, user)
     ]
 
 
 @app.get("/aois/{aoi_id}/ndvi")
-def ndvi_series(aoi_id: int, s: SessionDep) -> list[NdviPoint]:
+def ndvi_series(aoi_id: int, s: SessionDep, user: UserDep) -> list[NdviPoint]:
     return [
         NdviPoint(month=m.month, ndvi=m.ndvi_mean, observed_frac=m.observed_frac)
-        for m in _months(s, aoi_id)
+        for m in _months(s, aoi_id, user)
     ]
 
 
@@ -257,9 +300,10 @@ def ndvi_series(aoi_id: int, s: SessionDep) -> list[NdviPoint]:
 def scenes(
     aoi_id: int,
     s: SessionDep,
+    user: UserDep,
     month: Annotated[str, Query(pattern=r"^\d{4}-\d{2}$", description="YYYY-MM, UTC")],
 ) -> list[SceneOut]:
-    _aoi(s, aoi_id)
+    _aoi(s, aoi_id, user)
     start = datetime.strptime(month, "%Y-%m").replace(tzinfo=UTC)
     end = start.replace(year=start.year + start.month // 12, month=start.month % 12 + 1)
     rows = s.scalars(
@@ -293,11 +337,11 @@ def scenes(
 
 @app.get("/aois/{aoi_id}/scenes/{item_id}/{style}.png")
 def scene_image(
-    aoi_id: int, item_id: str, style: Literal["true_color", "ndvi"], s: SessionDep
+    aoi_id: int, item_id: str, style: Literal["true_color", "ndvi"], s: SessionDep, user: UserDep
 ) -> Response:
     """One pass over the AOI grid as the pipeline saw it, harmonized, from the cube.
     Place it on the map with the AOI's `corners`."""
-    _aoi(s, aoi_id)
+    _aoi(s, aoi_id, user)
     ds = cube.load(cube.cube_path(settings().data_dir, str(aoi_id)))
     index = np.flatnonzero(ds["item_id"].values == item_id) if ds is not None else []
     if len(index) != 1 or ds["status"].values[index[0]] != "full":
@@ -312,7 +356,7 @@ def scene_image(
     return Response(
         render.png(render.with_alpha(rgb, has_data)),
         media_type="image/png",
-        headers={"Cache-Control": "public, max-age=31536000, immutable"},  # a pass never changes
+        headers={"Cache-Control": "private, max-age=31536000, immutable"},  # a pass never changes
     )
 
 
@@ -337,52 +381,376 @@ class EventOut(BaseModel):
     history: list[StatusChange]
     items: list[str]
     method_version: str
-    alerts: bool  # whether it alerts, in its current status, under the area's alert rule
-    alert_reason: str  # why not, when it doesn't: "seasonal", "category off", ...
+    alerts: bool  # whether it would have alerted at any point, under the area's rule settings
+    alert_reason: str  # why not, when it wouldn't: "seasonal", "category off", ...
+    not_real: bool  # the user said it isn't a real change
+
+
+def _feedback_given(s: Session, user: db.User, event_ids: list[int]) -> set[int]:
+    return set(
+        s.scalars(
+            select(db.Feedback.event_id).where(
+                db.Feedback.user_id == user.id, db.Feedback.event_id.in_(event_ids)
+            )
+        )
+    )
 
 
 @app.get("/aois/{aoi_id}/events")
-def events(aoi_id: int, s: SessionDep) -> list[EventOut]:
-    """The AOI's changes, newest first, with their provenance and whether each alerts."""
-    _aoi(s, aoi_id)
-    rule = alerts.default_rule(pipeline_config().alerts)
-    rows = s.scalars(
-        select(db.Event).where(db.Event.aoi_id == aoi_id).order_by(db.Event.detected_utc.desc())
+def events(aoi_id: int, s: SessionDep, user: UserDep) -> list[EventOut]:
+    """The AOI's changes, newest first, with their provenance and whether each would have
+    alerted under the area's rule settings (whether or not alerts are switched on)."""
+    _aoi(s, aoi_id, user)
+    rule = _rule(s, aoi_id)
+    rows = list(
+        s.scalars(
+            select(db.Event).where(db.Event.aoi_id == aoi_id).order_by(db.Event.detected_utc.desc())
+        )
     )
+    given = _feedback_given(s, user, [e.id for e in rows])
     out = []
     for e in rows:
-        ok, why = alerts.should_alert(e.status, e.category, e.area_ha, rule)
+        ok, why = _would_alert(e, rule)
         fields = {c: getattr(e, c) for c in EventOut.model_fields if hasattr(db.Event, c)}
         out.append(
             EventOut(
                 **fields | {"geometry": mapping(to_shape(e.geometry))},
                 alerts=ok,
                 alert_reason=why,
+                not_real=e.id in given,
             )
         )
     return out
 
 
-@app.get("/aois/{aoi_id}/events/{event_id}/{side}.png")
-def event_image(
-    aoi_id: int, event_id: int, side: Literal["before", "after"], s: SessionDep
-) -> Response:
-    """True colour around an event from the composite on that side of the comparison.
-    Pixels no clear pass saw stay transparent: nothing is filled in."""
-    aoi = _aoi(s, aoi_id)
+def _event(s: Session, aoi_id: int, event_id: int) -> db.Event:
     event = s.get(db.Event, event_id)
     if event is None or event.aoi_id != aoi_id:
         raise HTTPException(404, "no such event")
-    month = event.reference_month if side == "before" else event.month
-    path = composites.composite_dir(settings().data_dir, str(aoi_id)) / f"{month:%Y-%m}.tif"
-    if not path.exists():
+    return event
+
+
+@app.get("/aois/{aoi_id}/events/{event_id}/{side}.png")
+def event_image(
+    aoi_id: int, event_id: int, side: Literal["before", "after"], s: SessionDep, user: UserDep
+) -> Response:
+    """True colour around an event from the composite on that side of the comparison, its
+    footprint outlined. Pixels no clear pass saw stay transparent."""
+    aoi = _aoi(s, aoi_id, user)
+    image = notify.event_image(aoi, _event(s, aoi_id, event_id), side)
+    if image is None:
         raise HTTPException(404, "no composite for that month")
-    grid = jobs.grid_for(aoi)
-    area = reproject(to_shape(event.geometry), 4326, grid.epsg)
-    image = render.crop(composites.read_composite(path), grid, area)
     # A composite is recomputed when its masks or settings change, so no immutable here.
     return Response(
-        render.png(image), media_type="image/png", headers={"Cache-Control": "max-age=3600"}
+        image, media_type="image/png", headers={"Cache-Control": "private, max-age=3600"}
+    )
+
+
+def _provenance(event: db.Event) -> dict:
+    """Everything that explains an event, as JSON: what feedback is stored with."""
+    return {
+        "event_id": event.id,
+        "aoi_id": event.aoi_id,
+        "month": event.month.isoformat(),
+        "reference_month": event.reference_month.isoformat(),
+        "category": event.category,
+        "status": event.status,
+        "area_ha": event.area_ha,
+        "geometry": mapping(to_shape(event.geometry)),
+        "ndvi_before": event.ndvi_before,
+        "ndvi_after": event.ndvi_after,
+        "detected_utc": event.detected_utc.isoformat(),
+        "history": event.history,
+        "items": event.items,
+        "method_version": event.method_version,
+        "thresholds": event.thresholds,
+    }
+
+
+def _record_not_real(s: Session, event: db.Event, user_id: int, via: str) -> None:
+    """Store "not a real change" once per event and user; saying it again changes nothing."""
+    s.execute(
+        insert(db.Feedback)
+        .values(
+            event_id=event.id,
+            user_id=user_id,
+            verdict="not_real",
+            via=via,
+            event=_provenance(event),
+        )
+        .on_conflict_do_nothing()
+    )
+    s.commit()
+    logger.info("feedback: event {} not a real change ({}, via {})", event.id, event.category, via)
+
+
+@app.post("/aois/{aoi_id}/events/{event_id}/feedback", status_code=204)
+def not_real(aoi_id: int, event_id: int, s: SessionDep, user: UserDep) -> None:
+    _aoi(s, aoi_id, user)
+    _record_not_real(s, _event(s, aoi_id, event_id), user.id, via="app")
+
+
+class AlertRuleIn(BaseModel):
+    enabled: bool
+    categories: list[str]
+    skip_seasonal: bool
+    min_ha: float
+
+
+class AlertRuleOut(AlertRuleIn):
+    watching_since: datetime | None  # only passes acquired after this alert
+    min_ha_range: tuple[float, float]  # the "smallest change" slider
+
+
+class RulePreview(BaseModel):
+    changes: int  # past changes in this AOI
+    would_alert: int  # of them, those these settings would have sent an alert for
+    retracted: int  # of those, the ones later dismissed or found seasonal: false alarms
+
+
+def _rule(s: Session, aoi_id: int) -> alerts.AlertRule:
+    return alerts.rule_of(s.get(db.AlertRule, aoi_id), pipeline_config().alerts)
+
+
+def _min_ha_range() -> tuple[float, float]:
+    cfg = pipeline_config()
+    return cfg.detection.min_mapping_unit_ha, cfg.alerts.max_min_ha
+
+
+def _would_alert(event: db.Event, rule: alerts.AlertRule) -> tuple[bool, str]:
+    """Under the rule's settings, switched on: the list and the preview say what these
+    settings let through, whether or not alerts are on right now."""
+    statuses = [h["status"] for h in event.history]
+    on = alerts.AlertRule(
+        min_ha=rule.min_ha, categories=rule.categories, skip_seasonal=rule.skip_seasonal
+    )
+    return alerts.would_alert(statuses, event.category, event.area_ha, on)
+
+
+def _checked(body: AlertRuleIn) -> alerts.AlertRule:
+    low, high = _min_ha_range()
+    if not low <= body.min_ha <= high:
+        raise HTTPException(422, f"smallest change must be between {low:g} and {high:g} ha")
+    if unknown := set(body.categories) - set(CATEGORIES):
+        raise HTTPException(422, f"unknown categories: {sorted(unknown)}")
+    return alerts.AlertRule(
+        min_ha=body.min_ha,
+        enabled=body.enabled,
+        categories=frozenset(body.categories),
+        skip_seasonal=body.skip_seasonal,
+    )
+
+
+def _rule_out(rule: alerts.AlertRule, watching_since: datetime | None) -> AlertRuleOut:
+    return AlertRuleOut(
+        enabled=rule.enabled,
+        categories=[c for c in CATEGORIES if c in rule.categories],
+        skip_seasonal=rule.skip_seasonal,
+        min_ha=rule.min_ha,
+        watching_since=watching_since,
+        min_ha_range=_min_ha_range(),
+    )
+
+
+@app.get("/aois/{aoi_id}/alert-rule")
+def get_alert_rule(aoi_id: int, s: SessionDep, user: UserDep) -> AlertRuleOut:
+    _aoi(s, aoi_id, user)
+    row = s.get(db.AlertRule, aoi_id)
+    return _rule_out(_rule(s, aoi_id), row.watching_since if row else None)
+
+
+@app.put("/aois/{aoi_id}/alert-rule")
+def put_alert_rule(aoi_id: int, body: AlertRuleIn, s: SessionDep, user: UserDep) -> AlertRuleOut:
+    """Save the AOI's rule. Turning alerts on starts watching from the newest pass already
+    in the archive, so the archive's own history never arrives as a pile of emails."""
+    aoi = _aoi(s, aoi_id, user)
+    rule = _checked(body)
+    row = s.get(db.AlertRule, aoi_id)
+    since = row.watching_since if row is not None and row.enabled else None
+    if rule.enabled and since is None:
+        newest = s.scalar(select(func.max(db.Scene.acquired_utc)).where(db.Scene.aoi_id == aoi_id))
+        # While a backfill runs the archive isn't complete: start from now instead.
+        since = newest if aoi.stage == "ready" and newest else datetime.now(UTC)
+    values = {
+        "enabled": rule.enabled,
+        "categories": sorted(rule.categories),
+        "skip_seasonal": rule.skip_seasonal,
+        "min_ha": rule.min_ha,
+        "watching_since": since if rule.enabled else None,
+    }
+    if row is None:
+        s.add(db.AlertRule(aoi_id=aoi_id, **values))
+    else:
+        for name, value in values.items():
+            setattr(row, name, value)
+    s.commit()
+    return _rule_out(rule, values["watching_since"])
+
+
+@app.post("/aois/{aoi_id}/alert-rule/preview")
+def preview_alert_rule(aoi_id: int, body: AlertRuleIn, s: SessionDep, user: UserDep) -> RulePreview:
+    """ "N of M past changes would have alerted", for settings not saved yet."""
+    _aoi(s, aoi_id, user)
+    rule = _checked(body)
+    rows = list(s.scalars(select(db.Event).where(db.Event.aoi_id == aoi_id)))
+    alerted = [e for e in rows if _would_alert(e, rule)[0]]
+    return RulePreview(
+        changes=len(rows),
+        would_alert=len(alerted),
+        retracted=sum(e.status in ("dismissed", "seasonal") for e in alerted),
+    )
+
+
+class Login(BaseModel):
+    email: str = Field(max_length=accounts.MAX_EMAIL)
+
+
+class Me(BaseModel):
+    email: str
+
+
+class LinkSent(BaseModel):
+    minutes: int  # how long the link works
+
+
+@app.post("/auth/login", status_code=202)
+def login(body: Login, s: SessionDep) -> LinkSent:
+    """Email a sign-in link. The answer is the same whether or not the address has an
+    account, so it can't be used to find out who does."""
+    email = accounts.normalize_email(body.email)
+    if email is None:
+        raise HTTPException(422, "that doesn't look like an email address")
+    cfg = pipeline_config().accounts
+    token = accounts.new_login_link(s, email, cfg)
+    s.commit()
+    link = f"{settings().api_url}/auth/callback?token={token}"
+    mail.send(accounts.login_email(email, link, cfg))
+    return LinkSent(minutes=cfg.login_link_minutes)
+
+
+def _page(title: str, body: str, status: int = 200) -> HTMLResponse:
+    """A small page for the links in emails, which open outside the web app."""
+    return HTMLResponse(
+        f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex"><title>{html.escape(title)} · Orbit Diff</title>
+<style>
+:root{{color-scheme:light dark;--bg:#f4f5f6;--card:#fff;--ink:#1c2126;--muted:#5c6670;
+--line:#c3cad1}}
+@media (prefers-color-scheme:dark){{:root{{--bg:#111417;--card:#1a1e22;--ink:#e8eaec;
+--muted:#9aa4ad;--line:#3a4148}}}}
+body{{margin:0;padding:48px 16px;background:var(--bg);color:var(--ink);
+font:16px/1.5 -apple-system,'Segoe UI',Roboto,sans-serif}}
+main{{max-width:480px;margin:0 auto;background:var(--card);border-radius:12px;padding:28px}}
+h1{{font-size:20px;margin:0 0 12px}} p{{margin:0 0 16px}}
+.muted{{color:var(--muted);font-size:14px}}
+.pair{{display:flex;gap:8px;margin:0 0 16px}} .pair figure{{margin:0;flex:1}}
+.pair img{{width:100%;border-radius:6px;display:block}}
+figcaption{{font-size:12px;color:var(--muted);margin-top:4px}}
+button,a.btn{{font:inherit;background:var(--ink);color:var(--card);border:0;border-radius:8px;
+padding:10px 18px;cursor:pointer;text-decoration:none;display:inline-block}}
+</style></head><body><main><h1>{html.escape(title)}</h1>{body}</main></body></html>""",
+        status_code=status,
+    )
+
+
+def _home_link() -> str:
+    return f'<a class="btn" href="{html.escape(settings().web_url)}">Open Orbit Diff</a>'
+
+
+@app.get("/auth/callback")
+def callback(token: str, s: SessionDep) -> Response:
+    """Where a sign-in link lands: start a session and go to the web app."""
+    cfg = pipeline_config().accounts
+    used = accounts.use_login_link(s, token, cfg)
+    if used is None:
+        return _page(
+            "This sign-in link has expired",
+            f"<p>Links work for {cfg.login_link_minutes} minutes. Ask for a new one.</p>"
+            + _home_link(),
+            status=400,
+        )
+    _, session = used
+    s.commit()
+    response = RedirectResponse(settings().web_url, status_code=303)
+    response.set_cookie(
+        accounts.COOKIE,
+        session,
+        max_age=cfg.session_days * 86400,
+        httponly=True,
+        samesite="lax",
+        secure=settings().web_url.startswith("https://"),
+    )
+    return response
+
+
+@app.get("/auth/me")
+def me(user: UserDep) -> Me:
+    return Me(email=user.email)
+
+
+@app.post("/auth/logout", status_code=204)
+def logout(s: SessionDep, response: Response, token: SessionCookie = None) -> None:
+    if token:
+        accounts.end_session(s, token)
+        s.commit()
+    response.delete_cookie(accounts.COOKIE)
+
+
+def _feedback_target(s: Session, token: str) -> tuple[db.Event, db.Aoi, int] | None:
+    payload = accounts.verify("feedback", token)
+    if payload is None:
+        return None
+    event = s.get(db.Event, payload["e"])
+    aoi = s.get(db.Aoi, event.aoi_id) if event else None
+    if aoi is None or aoi.user_id != payload["u"]:  # the AOI is gone or changed hands
+        return None
+    return event, aoi, payload["u"]
+
+
+def _data_uri(png: bytes) -> str:
+    return f"data:image/png;base64,{base64.b64encode(png).decode()}"
+
+
+@app.get("/feedback/{token}")
+def feedback_page(token: str, s: SessionDep) -> HTMLResponse:
+    """The "Not a real change" link in an alert email. It only asks: mail scanners open
+    links before people do, so recording on GET would record what no one said."""
+    target = _feedback_target(s, token)
+    if target is None:
+        return _page("This link no longer works", "<p>It has expired.</p>" + _home_link(), 400)
+    event, aoi, _ = target
+    what = notify.WHAT[event.category]
+    images = {side: notify.event_image(aoi, event, side) for side in ("before", "after")}
+    months = {"before": event.reference_month, "after": event.month}
+    pair = "".join(
+        f'<figure><img alt="{side}" src="{_data_uri(png)}">'
+        f"<figcaption>{side.capitalize()} · {months[side]:%B %Y}</figcaption></figure>"
+        for side, png in images.items()
+        if png
+    )
+    return _page(
+        "Not a real change?",
+        f"<p>About {event.area_ha:.1f} ha of {html.escape(what)} in "
+        f"{html.escape(aoi.name)}, {event.month:%B %Y}.</p>"
+        f'<div class="pair">{pair}</div>'
+        '<form method="post"><button type="submit">Yes, not a real change</button></form>'
+        '<p class="muted" style="margin-top:16px">It tells us where the detector is wrong. '
+        "It doesn't turn off alerts for this area.</p>",
+    )
+
+
+@app.post("/feedback/{token}")
+def feedback_submit(token: str, s: SessionDep) -> HTMLResponse:
+    target = _feedback_target(s, token)
+    if target is None:
+        return _page("This link no longer works", "<p>It has expired.</p>" + _home_link(), 400)
+    event, _, user_id = target
+    _record_not_real(s, event, user_id, via="email")
+    return _page(
+        "Thanks, noted",
+        "<p>This change is recorded as not real, with the passes and settings that found it. "
+        "That's what we tune the detector with.</p>" + _home_link(),
     )
 
 

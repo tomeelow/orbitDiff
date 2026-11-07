@@ -18,6 +18,7 @@ export interface AoiSummary {
   name: string;
   area_ha: number;
   stage: Stage;
+  alerts_on: boolean;
 }
 
 export interface AoiDetail extends AoiSummary {
@@ -95,13 +96,36 @@ export interface ChangeEvent {
   history: StatusChange[];
   items: string[];
   method_version: string;
-  alerts: boolean; // under the area's alert rule, decided by the API
+  alerts: boolean; // would have alerted at some point under the area's rule, decided by the API
   alert_reason: string;
+  not_real: boolean; // the user said it isn't a real change
+}
+
+/** What an area's alert rule lets through. Only the API evaluates it. */
+export interface AlertSettings {
+  enabled: boolean;
+  categories: Category[];
+  skip_seasonal: boolean;
+  min_ha: number;
+}
+
+export interface AlertRule extends AlertSettings {
+  watching_since: string | null; // only passes acquired after this alert
+  min_ha_range: [number, number];
+}
+
+export interface RulePreview {
+  changes: number; // past changes in the area
+  would_alert: number; // of them, those these settings would have emailed about
+  retracted: number; // of those, later dismissed or found seasonal
 }
 
 export interface Limits {
   max_area_km2: number;
 }
+
+/** Fired when the API says the session is gone, so the app can ask to sign in again. */
+export const SIGNED_OUT = "orbitdiff:signed-out";
 
 export class ApiError extends Error {
   constructor(
@@ -117,6 +141,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     response = await fetch(`${API_URL}${path}`, {
       ...init,
+      credentials: "include", // the session cookie
       headers: { "content-type": "application/json", ...init?.headers },
     });
   } catch {
@@ -125,23 +150,43 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     const body = await response.json().catch(() => null);
     const detail = typeof body?.detail === "string" ? body.detail : response.statusText;
+    if (response.status === 401) window.dispatchEvent(new Event(SIGNED_OUT));
     throw new ApiError(response.status, detail);
   }
-  return response.json() as Promise<T>;
+  const text = await response.text();
+  return (text ? JSON.parse(text) : undefined) as T;
 }
+
+const json = (method: string, body: unknown): RequestInit => ({
+  method,
+  body: JSON.stringify(body),
+});
 
 export const api = {
   limits: () => request<Limits>("/limits"),
   areas: () => request<AoiSummary[]>("/aois"),
   area: (id: number) => request<AoiDetail>(`/aois/${id}`),
   createArea: (name: string, geometry: Polygon) =>
-    request<AoiSummary>("/aois", { method: "POST", body: JSON.stringify({ name, geometry }) }),
+    request<AoiSummary>("/aois", json("POST", { name, geometry })),
   progress: (id: number) => request<Progress>(`/aois/${id}/progress`),
   backfill: (id: number) => request<Progress>(`/aois/${id}/backfill`, { method: "POST" }),
   timeline: (id: number) => request<Month[]>(`/aois/${id}/timeline`),
   ndvi: (id: number) => request<NdviPoint[]>(`/aois/${id}/ndvi`),
   scenes: (id: number, month: string) => request<Scene[]>(`/aois/${id}/scenes?month=${month}`),
   events: (id: number) => request<ChangeEvent[]>(`/aois/${id}/events`),
+  notReal: (id: number, eventId: number) =>
+    request<void>(`/aois/${id}/events/${eventId}/feedback`, { method: "POST" }),
+  alertRule: (id: number) => request<AlertRule>(`/aois/${id}/alert-rule`),
+  saveAlertRule: (id: number, settings: AlertSettings) =>
+    request<AlertRule>(`/aois/${id}/alert-rule`, json("PUT", settings)),
+  previewAlertRule: (id: number, settings: AlertSettings, signal?: AbortSignal) =>
+    request<RulePreview>(`/aois/${id}/alert-rule/preview`, {
+      ...json("POST", settings),
+      signal,
+    }),
+  me: () => request<{ email: string }>("/auth/me"),
+  signIn: (email: string) => request<{ minutes: number }>("/auth/login", json("POST", { email })),
+  signOut: () => request<void>("/auth/logout", { method: "POST" }),
 };
 
 export const eventImageUrl = (areaId: number, eventId: number, side: "before" | "after") =>

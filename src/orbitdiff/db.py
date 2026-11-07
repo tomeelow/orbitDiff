@@ -1,17 +1,20 @@
-"""Postgres + PostGIS records (ADR-006): AOIs, the passes over them, their months, and the
-changes found in them.
+"""Postgres + PostGIS records (ADR-006): AOIs, the passes over them, their months, the
+changes found in them, and the people watching them: accounts, alert rules, the emails
+sent and the feedback given.
 
 Rasters stay in the data store; these rows describe them. Geometries are stored in
-EPSG:4326 and every area is computed in the AOI's UTM zone. Accounts arrive in Phase 9,
-and with them an owner on every AOI.
+EPSG:4326 and every area is computed in the AOI's UTM zone. An AOI around someone's home
+is personal data: every AOI has one owner, and only they see it.
 """
 
+import math
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import date, datetime
 from functools import cache
 
 from geoalchemy2 import Geometry, WKBElement
+from geoalchemy2.shape import to_shape
 from sqlalchemy import (
     JSON,
     BigInteger,
@@ -23,12 +26,14 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    UniqueConstraint,
     create_engine,
     false,
     func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
+from orbitdiff.aoi import AOIGrid, make_grid
 from orbitdiff.config import settings
 
 STAGES = ("queued", "reading", "masking", "compositing", "detecting", "ready", "failed")
@@ -38,11 +43,47 @@ class Base(DeclarativeBase):
     pass
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    email: Mapped[str] = mapped_column(String(254), unique=True)  # verified by a sign-in link
+    created_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class LoginLink(Base):
+    """A sign-in link sent by email. Only a hash of its token is kept, so the link itself
+    carries nothing personal and this table can't be used to sign in."""
+
+    __tablename__ = "login_links"
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    email: Mapped[str] = mapped_column(String(254))
+    expires_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class LoginSession(Base):
+    """A signed-in browser. The cookie holds the token; this row only its hash."""
+
+    __tablename__ = "sessions"
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    expires_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class Aoi(Base):
     __tablename__ = "aois"
     __table_args__ = (Index("ix_aois_geometry", "geometry", postgresql_using="gist"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # None only for AOIs drawn before accounts existed: no one sees them until
+    # `orbitdiff assign-aois` gives them an owner.
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
     name: Mapped[str] = mapped_column(String(80))
     geometry: Mapped[WKBElement] = mapped_column(
         Geometry("POLYGON", srid=4326, spatial_index=False)
@@ -58,6 +99,11 @@ class Aoi(Base):
     progress_done: Mapped[int] = mapped_column(Integer, default=0)
     progress_total: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str | None] = mapped_column(String, default=None)
+
+    def grid(self) -> AOIGrid:
+        # The size cap was enforced when the AOI was created; a later, lower cap must not
+        # strand existing AOIs.
+        return make_grid(str(self.id), to_shape(self.geometry), max_km2=math.inf)
 
 
 class Scene(Base):
@@ -127,6 +173,66 @@ class Event(Base):
     thresholds: Mapped[dict] = mapped_column(JSON)  # the detection settings in force
     updated_utc: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class AlertRule(Base):
+    """When changes in an AOI reach its owner by email. Evaluated only by
+    `alerts.should_alert`. An AOI without a row has alerts off."""
+
+    __tablename__ = "alert_rules"
+
+    aoi_id: Mapped[int] = mapped_column(ForeignKey("aois.id", ondelete="CASCADE"), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean)
+    categories: Mapped[list] = mapped_column(JSON)
+    skip_seasonal: Mapped[bool] = mapped_column(Boolean)
+    min_ha: Mapped[float] = mapped_column(Float)
+    # Only a status set by a pass acquired after this alerts: when alerts were turned on,
+    # the AOI's archive up to here was already in front of its owner.
+    watching_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class Notification(Base):
+    """One email about one event to one user: the alert, then at most one follow-up when
+    the event is confirmed, dismissed or turns out seasonal. The unique key is what keeps
+    job retries from sending twice."""
+
+    __tablename__ = "notifications"
+    __table_args__ = (UniqueConstraint("event_id", "user_id", "kind"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"))
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(String(16))  # alert | update
+    event_status: Mapped[str] = mapped_column(String(16))  # the status the email reported
+    # claimed -> sent, or failed (retried up to alerts.send_attempts). A claim never
+    # finished means the process died mid-send: it is never retried, as the email may
+    # have gone out.
+    state: Mapped[str] = mapped_column(String(16))
+    attempts: Mapped[int] = mapped_column(Integer)
+    error: Mapped[str | None] = mapped_column(String)
+    claimed_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    sent_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Feedback(Base):
+    """ "Not a real change", with the event as it was when the user said so: the precision
+    signal and future training data. Biased: users only see what alerted (CLAUDE.md)."""
+
+    __tablename__ = "feedback"
+    __table_args__ = (UniqueConstraint("event_id", "user_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"))
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    verdict: Mapped[str] = mapped_column(String(16))  # not_real
+    via: Mapped[str] = mapped_column(String(8))  # email | app
+    event: Mapped[dict] = mapped_column(JSON)  # provenance snapshot
+    created_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
     )
 
 

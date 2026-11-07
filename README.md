@@ -64,8 +64,18 @@ polygon → STAC search → windowed COG reads → cloud masking → monthly com
    looked like this in the same month of an earlier year (floods, crop rotations), or if
    it reverts within three months. Every event records the passes, months, method version
    and thresholds it came from.
-8. **Alert** *(planned)*: emails with before/after crops, size, method, status and a signed
-   "Not a real change" link. That feedback is the precision signal and training data.
+8. **Alert.** Each area has a rule: on or off, the categories to hear about, whether to skip
+   seasonal changes, and the smallest change (0.1 to 5 ha). One evaluator in the API
+   decides; the web app's preview asks it how many past changes would have emailed you,
+   false alarms a later pass took back included. Turning alerts on starts from the newest
+   pass already in the archive, so its history never arrives as a pile of emails. A
+   scheduler queues an update for every watched area every few hours. A change alerts
+   once, with outlined before/after crops, size, NDVI, status and method, then at most once
+   more when it's confirmed, dismissed or found seasonal. Each email is claimed in the
+   database before it's sent, so a retried job never sends it twice.
+9. **Feedback.** "Not a real change", from the email (a signed link that needs no sign-in)
+   or the app, is stored with the change's full provenance. It is the precision signal and
+   future training data, and it only measures precision: people only see what alerted.
 
 ## Status
 
@@ -80,7 +90,8 @@ polygon → STAC search → windowed COG reads → cloud masking → monthly com
 | 6. Evaluation harness and naive baseline (labels still to verify) | done |
 | 7. Classical detectors, events and statuses (thresholds provisional) | done |
 | 8. U-Net for buildings | next |
-| 9–10. Watching, alerts, feedback, monitoring | planned |
+| 9. Accounts, alert rules, alert emails, feedback | done |
+| 10. Monitoring and the feedback loop | planned |
 | 11–12. Deployment, documentation | planned |
 
 `mockup/orbit-diff.html` is an early sketch of the UI (synthetic imagery and events), not its final design.
@@ -98,37 +109,38 @@ polygon → STAC search → windowed COG reads → cloud masking → monthly com
 ## Running it locally
 
 Requires [uv](https://docs.astral.sh/uv/) and Docker. No API keys are needed: Earth Search
-is open, and Planetary Computer issues an anonymous token.
+is open, and Planetary Computer issues an anonymous token. The one secret is a signing key
+for the links in alert emails, which you generate yourself:
 
 ```bash
 uv sync --group ml                 # ml: the cloud model, needed by mask and worker
 docker compose up -d               # Postgres+PostGIS (5433), Redis, Mailpit, TiTiler (8001)
 uv run alembic upgrade head
+cp .env.example .env               # then set ORBITDIFF_SIGNING_KEY (see the comment there)
 ```
 
-Through the API, which queues a backfill per AOI:
+Run the API, a worker for backfills, and the web app (Node 22.12+ and pnpm):
 
 ```bash
 uv run uvicorn orbitdiff.api:app   # http://localhost:8000/docs
-uv run orbitdiff worker            # runs queued backfills
+uv run orbitdiff worker            # runs queued backfills, then sends due alert emails
+cd web && pnpm install && pnpm dev # http://localhost:5173
 ```
+
+Sign in with any address: the sign-in link, like every email in development, lands in
+Mailpit at http://localhost:8025 and nowhere else. Draw an area, watch its backfill, then
+step through the archive with A/B swipe, NDVI and single passes, look through the changes
+found, and turn on alerts. `web/.env.example` lists the API and basemap URLs it reads.
+
+For alerts on new passes, run the scheduler too. It queues an update for every area with
+alerts on, every `[schedule] poll_every_hours`:
 
 ```bash
-curl -X POST localhost:8000/aois -H 'content-type: application/json' \
-  -d '{"name": "Kyiv west", "geometry": {"type": "Polygon", "coordinates": [[[30.674, 50.3845], [30.701, 50.3845], [30.701, 50.396], [30.674, 50.396], [30.674, 50.3845]]]}}'
+uv run orbitdiff scheduler         # --once polls once and exits
 ```
 
-Then follow `/aois/{id}/progress`, and browse `/aois/{id}/timeline`, `/ndvi` and
-`/scenes?month=YYYY-MM`. Timeline entries carry TiTiler tile URLs for true colour and NDVI.
-
-Or in the web app (Node 22.12+ and pnpm), with the API and a worker running:
-
-```bash
-cd web && pnpm install && pnpm dev   # http://localhost:5173
-```
-
-Draw an area, watch its backfill, then step through the archive with A/B swipe, NDVI and
-single passes. `web/.env.example` lists the API and basemap URLs it reads.
+Areas drawn before accounts existed have no owner and show for no one until you give them
+one: `uv run orbitdiff assign-aois --email you@example.com`.
 
 Or step by step from the command line, with no database:
 
@@ -148,7 +160,8 @@ committed. AOIs are capped at 10 km².
   size cap, archive start, SCL classes, dilation, cloud model version, offset check,
   gap-fill distance, minimum mapping unit). No thresholds live in code.
 - **Environment** (`ORBITDIFF_*`, see `.env.example`): paths, database and Redis URLs,
-  and later the secrets. `.env` is never committed.
+  the email server (Mailpit in development), the URLs links in emails point to, and the
+  signing key. `.env` is never committed.
 
 ## Tests
 

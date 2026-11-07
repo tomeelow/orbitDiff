@@ -1,12 +1,14 @@
-"""Queue jobs (RQ): an AOI's backfill, from catalog search to monthly composites.
+"""Queue jobs (RQ): an AOI's backfill, from catalog search to change events and alerts.
 
 The backfill is incremental by construction: every step only does what's missing, so
-rerunning it after a failure, or later for new passes, goes through the same code.
+rerunning it after a failure, or later for new passes, goes through the same code. That
+rerun is also the new-pass loop: the scheduler queues it for every watched AOI.
 Progress lives on the AOI's row, so it outlives the job.
 """
 
 import math
 import time
+from collections.abc import Callable
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -18,9 +20,10 @@ from rq import Queue
 from shapely.geometry.base import BaseGeometry
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import Session
 
-from orbitdiff import composites, cube, db, detection, masking, render
-from orbitdiff.aoi import AOIGrid, make_grid, reproject
+from orbitdiff import composites, cube, db, detection, masking, notify, render
+from orbitdiff.aoi import AOIGrid, reproject
 from orbitdiff.config import PipelineConfig, pipeline_config, settings
 from orbitdiff.fetch import fetch_aoi
 
@@ -30,10 +33,34 @@ MASK_BATCH = 64  # passes loaded at once when computing clear fractions
 UPSERT_ROWS = 1000  # rows per statement; Postgres allows 65,535 parameters
 
 
-def grid_for(aoi: db.Aoi) -> AOIGrid:
-    # The size cap was enforced when the AOI was created; a later, lower cap must not
-    # strand existing AOIs.
-    return make_grid(str(aoi.id), to_shape(aoi.geometry), max_km2=math.inf)
+def claim_backfill(s: Session, aoi_id: int) -> bool:
+    """Mark an idle AOI (ready, or failed) queued, so it's queued once however many callers
+    ask at the same moment. False when it's already queued or running."""
+    claimed = s.execute(
+        update(db.Aoi)
+        .where(db.Aoi.id == aoi_id, db.Aoi.stage.in_(("ready", "failed")))
+        .values(stage="queued", error=None)
+        .returning(db.Aoi.id)
+    ).scalar_one_or_none()
+    return claimed is not None
+
+
+def poll_watched(enqueue: Callable[[int], None] | None = None) -> list[int]:
+    """Queue an update for every AOI with alerts on that isn't already updating (ADR-008).
+    The update searches only the current year: finished years' searches are cached."""
+    enqueue = enqueue or enqueue_backfill
+    with db.session() as s:
+        watched = s.scalars(
+            select(db.AlertRule.aoi_id)
+            .join(db.Aoi)
+            .where(db.AlertRule.enabled, db.Aoi.user_id.is_not(None))
+            .order_by(db.AlertRule.aoi_id)
+        ).all()
+        queued = [aoi_id for aoi_id in watched if claim_backfill(s, aoi_id)]
+    for aoi_id in queued:
+        enqueue(aoi_id)
+    logger.info("poll: {} watched AOIs, {} queued", len(watched), len(queued))
+    return queued
 
 
 def enqueue_backfill(aoi_id: int) -> None:
@@ -53,7 +80,7 @@ def backfill(aoi_id: int, model: masking.CloudModel | None = None) -> None:
         aoi = s.get(db.Aoi, aoi_id)
         if aoi is None:
             raise LookupError(f"no AOI {aoi_id}")
-        grid, start = grid_for(aoi), aoi.archive_start
+        grid, start = aoi.grid(), aoi.archive_start
     logger.info("backfill {}: {:.2f} km², EPSG:{}", aoi_id, grid.area_km2, grid.epsg)
 
     def progress(done: int, total: int) -> None:
@@ -76,6 +103,9 @@ def backfill(aoi_id: int, model: masking.CloudModel | None = None) -> None:
     except Exception as exc:
         _set(aoi_id, stage="failed", error=f"{type(exc).__name__}: {exc}")
         raise
+    # After "ready": the archive is complete either way, and a failed email is retried on
+    # the next run, not reported as a failed backfill.
+    notify.notify(aoi_id)
 
 
 def _mask_stats(ds, masks, grid: AOIGrid, cfg: PipelineConfig) -> dict[str, tuple[float, bool]]:
@@ -207,7 +237,7 @@ def sync_events(aoi_id: int, cfg: PipelineConfig, data_dir: Path) -> None:
     t0 = time.perf_counter()
     key = str(aoi_id)
     with db.session() as s:
-        grid = grid_for(s.get(db.Aoi, aoi_id))
+        grid = s.get(db.Aoi, aoi_id).grid()
     method = detection.methods(cfg.detection)[detection.PRODUCTION]
     found = detection.detect(
         detection.load_stack(data_dir, key),

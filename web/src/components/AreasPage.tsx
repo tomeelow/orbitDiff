@@ -44,7 +44,10 @@ export function AreasPage() {
           {areas.data.map((area) => (
             <li key={area.id}>
               <a href={`#/areas/${area.id}`}>
-                <span className="area-name">{area.name}</span>
+                <span className="area-name">
+                  {area.name}
+                  {area.alerts_on && <span className="tag tag-alert">Alerts on</span>}
+                </span>
                 <span className="fig muted">{formatArea(area.area_ha)}</span>
                 <span
                   className={
