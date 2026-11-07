@@ -1,10 +1,12 @@
+from collections import Counter
 from dataclasses import replace
 from datetime import UTC, date, datetime
 
 import numpy as np
 import pytest
+from rasterio.errors import RasterioIOError
 
-from orbitdiff import catalog, cube
+from orbitdiff import catalog, cube, reading
 from orbitdiff.config import REPO_ROOT, load_pipeline_config
 from orbitdiff.fetch import fetch_aoi
 from orbitdiff.reading import read_pass
@@ -81,6 +83,35 @@ def test_fetch_reads_only_missing_passes(tmp_path, grid, make_scene, monkeypatch
     second = fetch_aoi(grid, date(2021, 1, 1), date(2021, 12, 31), cfg, tmp_path)
     assert (second.passes, second.cached, second.tile_cloud, second.bytes_read) == (3, 2, 1, 0)
     assert cube.load(cube.cube_path(tmp_path, grid.aoi_id)).sizes["time"] == 3
+
+
+def test_fetch_retries_a_pass_that_failed_and_leaves_one_that_keeps_failing(
+    tmp_path, grid, make_scene, monkeypatch
+):
+    scenes = [make_scene("a"), make_scene("b", acquired=datetime(2021, 8, 18, 9, tzinfo=UTC))]
+    monkeypatch.setattr(catalog, "search", lambda *a, **k: list(scenes))
+    read_pass, attempts = reading.read_pass, Counter()
+
+    def flaky(candidates, **kwargs):
+        name = candidates[0].item_id
+        attempts[name] += 1
+        if name == "b" or attempts[name] == 1:  # "a" drops once, "b" never answers
+            raise RasterioIOError("CURL error: Failed to connect")
+        return read_pass(candidates, **kwargs)
+
+    monkeypatch.setattr(reading, "read_pass", flaky)
+    reading_cfg = CFG.reading.model_copy(update={"retry_rounds": 2, "retry_wait_s": 0})
+    cfg = CFG.model_copy(update={"reading": reading_cfg})
+    progress: list[tuple[int, int]] = []
+
+    summary = fetch_aoi(
+        grid, date(2021, 1, 1), date(2021, 12, 31), cfg, tmp_path, lambda *p: progress.append(p)
+    )
+
+    assert (summary.full, summary.failed) == (1, 1)
+    assert attempts == {"a": 2, "b": 3}  # one try and two retry rounds
+    assert progress[-1] == (2, 2)  # both settled, one of them as failed
+    assert list(cube.load(cube.cube_path(tmp_path, grid.aoi_id))["item_id"].values) == ["a"]
 
 
 def test_fetch_refuses_a_cube_built_on_another_grid(tmp_path, grid, make_scene, monkeypatch):
