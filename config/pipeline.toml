@@ -5,15 +5,26 @@
 max_km2 = 10                      # windowed reads and the per-AOI cube assume small areas (ADR-001)
 archive_start = 2017-01-01
 
+# The one place that maps our band names to each catalog's asset keys.
 [catalog.primary]                 # ADR-002: one item per pass, newest processing baseline
 name = "earth-search"
 url = "https://earth-search.aws.element84.com/v1"
 collection = "sentinel-2-l2a"
+page_size = 100                   # larger pages return HTTP 500
+assets = { blue = "blue", green = "green", red = "red", nir = "nir", scl = "scl" }
 
 [catalog.fallback]                # ADR-002: COGs + anonymous token, not CDSE's JPEG 2000
 name = "planetary-computer"
 url = "https://planetarycomputer.microsoft.com/api/stac/v1"
 collection = "sentinel-2-l2a"
+page_size = 1000
+token_url = "https://planetarycomputer.microsoft.com/api/sas/v1/token/sentinel-2-l2a"
+assets = { blue = "B02", green = "B03", red = "B04", nir = "B08", scl = "SCL" }
+
+[reading]                         # docs/spikes.md, section 3
+max_tile_cloud_pct = 95           # tile-level pre-filter only; usability is decided per AOI
+fetch_min_clear_frac = 0.05       # read the 10 m bands only when SCL shows this much clear AOI
+workers = 16                      # concurrent window reads: latency, not bandwidth, is the limit
 
 [masking]
 scl_drop = [0, 1, 3, 8, 9, 10]    # no data, defective, cloud shadow, cloud medium/high, thin cirrus

@@ -1,0 +1,8 @@
+{
+  "type": "Feature",
+  "properties": {"name": "Mockup area, west of Kyiv (~1.9 x 1.3 km)"},
+  "geometry": {
+    "type": "Polygon",
+    "coordinates": [[[30.674, 50.3845], [30.701, 50.3845], [30.701, 50.396], [30.674, 50.396], [30.674, 50.3845]]]
+  }
+}

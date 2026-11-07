@@ -284,3 +284,40 @@ grouping AOIs by MGRS tile so one search covers many.
 
 Polling load on the catalog becoming a problem at many AOIs, or users wanting alerts
 within the hour of ingestion.
+
+---
+
+## ADR-009 — Read windows with rasterio directly, not odc-stac
+
+**Status:** accepted · **Date:** 2026-11-07
+
+### Context
+
+The plan sketched Phase 1 with `odc.stac.load(..., groupby="solar_day")`. Building it showed
+three things the pipeline must control that odc-stac decides for us: which item stands for a
+pass (ADR-002), whether a pass's 10 m bands are fetched at all (only after its SCL shows clear
+pixels over the AOI), and how many bytes each read cost.
+
+### Decision
+
+Read each asset with rasterio through a `WarpedVRT` onto the AOI's fixed grid
+(`orbitdiff.reading`). Pass choice lives in `catalog.group_passes`, the SCL-first gate in
+`reading.read_pass`, and bytes come from the COG block sizes under the window.
+
+### Reasoning
+
+- `groupby="solar_day"` mosaics every item of a day, so both processing versions of a
+  2018-2021 pass and both UTM zones get blended rather than one being chosen.
+- odc-stac loads all requested bands per item; the SCL-first gate would need a second load.
+- The direct path is ~100 lines and has no dependency beyond rasterio, which we need anyway.
+
+### Consequences
+
+- Concurrency is ours: passes run in a thread pool, and a pass's four bands in parallel.
+  Measured on the spike AOI (Jun-Sep 2021, 49 passes): 117 s and 189 MB, against 191 s with
+  bands read one after another.
+- A failed read falls back to the pass's next-best item instead of failing the load.
+
+### What would change our mind
+
+Larger AOIs or many-band products where dask-chunked lazy loading pays off.

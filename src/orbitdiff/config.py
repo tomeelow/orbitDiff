@@ -15,6 +15,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCL_CLASSES = frozenset(range(12))  # Sentinel-2 L2A scene classification: 0..11
+BANDS = ("blue", "green", "red", "nir")  # the 10 m bands we read, in our names
+ASSETS = frozenset(BANDS) | {"scl"}
 
 
 class _Section(BaseModel):
@@ -31,11 +33,26 @@ class Catalog(_Section):
     name: str
     url: str
     collection: str
+    page_size: int = Field(ge=1)
+    assets: dict[str, str]  # our band name -> the catalog's asset key
+    token_url: str | None = None  # hrefs need a short-lived SAS token from here
+
+    @model_validator(mode="after")
+    def _maps_every_asset(self) -> Self:
+        if set(self.assets) != ASSETS:
+            raise ValueError(f"assets must map exactly {sorted(ASSETS)}")
+        return self
 
 
 class CatalogConfig(_Section):
     primary: Catalog
     fallback: Catalog
+
+
+class ReadingConfig(_Section):
+    max_tile_cloud_pct: float = Field(gt=0, le=100)
+    fetch_min_clear_frac: float = Field(ge=0, le=1)
+    workers: int = Field(ge=1)
 
 
 class MaskingConfig(_Section):
@@ -66,6 +83,7 @@ class ScheduleConfig(_Section):
 class PipelineConfig(_Section):
     aoi: AOIConfig
     catalog: CatalogConfig
+    reading: ReadingConfig
     masking: MaskingConfig
     detection: DetectionConfig
     schedule: ScheduleConfig
@@ -77,6 +95,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="ORBITDIFF_", env_file=".env", extra="ignore")
 
     pipeline_config: Path = REPO_ROOT / "config" / "pipeline.toml"
+    # Per-AOI cubes, composites and the STAC search cache. Never in git.
+    data_dir: Path = REPO_ROOT / "data"
 
 
 def load_pipeline_config(path: Path) -> PipelineConfig:
