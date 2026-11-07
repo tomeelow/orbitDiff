@@ -1,3 +1,4 @@
+import { AdminPage } from "./components/AdminPage";
 import { AreaPage } from "./components/AreaPage";
 import { AreasPage } from "./components/AreasPage";
 import { DrawPage } from "./components/DrawPage";
@@ -11,6 +12,7 @@ export function App() {
   const [theme, toggleTheme] = useTheme();
   const [account, recheck, signOut] = useAccount();
   const email = account.state === "signed-in" ? account.email : null;
+  const admin = account.state === "signed-in" && account.admin;
   return (
     <>
       <TopBar
@@ -18,6 +20,7 @@ export function App() {
         theme={theme}
         onToggleTheme={toggleTheme}
         email={email}
+        admin={admin}
         onSignOut={signOut}
       />
       {account.state === "loading" && <LoadingState label="Opening Orbit Diff" />}
@@ -28,6 +31,7 @@ export function App() {
         <ErrorBoundary key={route.page === "area" ? `area-${route.id}` : route.page}>
           {route.page === "areas" && <AreasPage />}
           {route.page === "new" && <DrawPage theme={theme} />}
+          {route.page === "admin" && <AdminPage admin={admin} />}
           {route.page === "area" && <AreaPage id={route.id} change={route.change} theme={theme} />}
         </ErrorBoundary>
       )}
@@ -40,12 +44,14 @@ function TopBar({
   theme,
   onToggleTheme,
   email,
+  admin,
   onSignOut,
 }: {
   route: Route;
   theme: Theme;
   onToggleTheme: () => void;
   email: string | null;
+  admin: boolean;
   onSignOut: () => void;
 }) {
   const next = theme === "dark" ? "light" : "dark";
@@ -66,9 +72,17 @@ function TopBar({
       </a>
       {email && (
         <nav aria-label="Sections">
-          <a href="#/" aria-current={route.page !== "new" ? "page" : undefined}>
+          <a
+            href="#/"
+            aria-current={route.page === "areas" || route.page === "area" ? "page" : undefined}
+          >
             Areas
           </a>
+          {admin && (
+            <a href="#/admin" aria-current={route.page === "admin" ? "page" : undefined}>
+              Admin
+            </a>
+          )}
         </nav>
       )}
       <div className="bar-end">

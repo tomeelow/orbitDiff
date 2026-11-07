@@ -25,7 +25,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from orbitdiff import accounts, alerts, cube, db, jobs, mail, notify, render, tiles
+from orbitdiff import accounts, alerts, cube, db, jobs, mail, monitoring, notify, render, tiles
 from orbitdiff.aoi import make_grid, reproject
 from orbitdiff.config import pipeline_config, settings
 from orbitdiff.detection import CATEGORIES
@@ -65,6 +65,10 @@ def current_user(s: SessionDep, token: SessionCookie = None) -> db.User:
 
 
 UserDep = Annotated[db.User, Depends(current_user)]
+
+
+def _is_admin(user: db.User) -> bool:
+    return user.email in {e.strip().lower() for e in settings().admin_emails}
 
 
 class Polygon(BaseModel):
@@ -607,6 +611,7 @@ class Login(BaseModel):
 
 class Me(BaseModel):
     email: str
+    admin: bool  # sees the admin view
 
 
 class LinkSent(BaseModel):
@@ -686,7 +691,15 @@ def callback(token: str, s: SessionDep) -> Response:
 
 @app.get("/auth/me")
 def me(user: UserDep) -> Me:
-    return Me(email=user.email)
+    return Me(email=user.email, admin=_is_admin(user))
+
+
+@app.get("/admin/summary")
+def admin_summary(s: SessionDep, user: UserDep) -> monitoring.Summary:
+    """Pipeline health and alert precision, in aggregate: no names, places or addresses."""
+    if not _is_admin(user):
+        raise HTTPException(403, "admins only")
+    return monitoring.summary(s, pipeline_config(), datetime.now(UTC))
 
 
 @app.post("/auth/logout", status_code=204)

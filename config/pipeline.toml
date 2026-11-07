@@ -80,6 +80,13 @@ max_min_ha = 5.0                  # top of that slider; its floor is detection.m
 send_attempts = 3                 # tries per email before it is given up and logged
 feedback_link_days = 90           # how long an email's "Not a real change" link works
 
+[monitoring]                      # the admin view (Phase 10); flags only, never acts
+precision_days = 90               # alert precision from feedback over this many days
+health_days = 30                  # pipeline health over this many days
+min_precision = 0.7               # a category below this is flagged for review (PROVISIONAL)
+min_alerts = 10                   # ...once it has at least this many alerts in the window
+failures_shown = 10               # most recent failed runs listed
+
 [accounts]
 login_link_minutes = 15           # a sign-in link works this long, any number of times
 session_days = 30                 # signed in on a device for this long

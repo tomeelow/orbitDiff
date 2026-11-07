@@ -76,6 +76,10 @@ polygon → STAC search → windowed COG reads → cloud masking → monthly com
 9. **Feedback.** "Not a real change", from the email (a signed link that needs no sign-in)
    or the app, is stored with the change's full provenance. It is the precision signal and
    future training data, and it only measures precision: people only see what alerted.
+10. **Monitor.** An admin page shows alert precision from that feedback per method and
+    category, flagging any that fall too low for a person to review (nothing changes on
+    its own), and pipeline health: runs and failures, passes read and left to retry,
+    fallback reads, bytes read, emails sent or failed, and time from pass to alert.
 
 ## Status
 
@@ -91,7 +95,7 @@ polygon → STAC search → windowed COG reads → cloud masking → monthly com
 | 7. Classical detectors, events and statuses (thresholds provisional) | done |
 | 8. U-Net for buildings | next |
 | 9. Accounts, alert rules, alert emails, feedback | done |
-| 10. Monitoring and the feedback loop | planned |
+| 10. Monitoring: admin view of precision and pipeline health | done |
 | 11–12. Deployment, documentation | planned |
 
 `mockup/orbit-diff.html` is an early sketch of the UI (synthetic imagery and events), not its final design.
@@ -139,6 +143,8 @@ alerts on, every `[schedule] poll_every_hours`:
 uv run orbitdiff scheduler         # --once polls once and exits
 ```
 
+The admin page (`#/admin`) is for the addresses in `ORBITDIFF_ADMIN_EMAILS`.
+
 Areas drawn before accounts existed have no owner and show for no one until you give them
 one: `uv run orbitdiff assign-aois --email you@example.com`.
 
@@ -160,8 +166,8 @@ committed. AOIs are capped at 10 km².
   size cap, archive start, SCL classes, dilation, cloud model version, offset check,
   gap-fill distance, minimum mapping unit). No thresholds live in code.
 - **Environment** (`ORBITDIFF_*`, see `.env.example`): paths, database and Redis URLs,
-  the email server (Mailpit in development), the URLs links in emails point to, and the
-  signing key. `.env` is never committed.
+  the email server (Mailpit in development), the URLs links in emails point to, the
+  signing key and the admins' addresses. `.env` is never committed.
 
 ## Tests
 

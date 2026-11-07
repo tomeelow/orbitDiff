@@ -5,7 +5,7 @@ it; see .env.example). Imagery comes from local files, as everywhere else.
 """
 
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlsplit
 
 import numpy as np
@@ -92,6 +92,13 @@ def client(data_dir, outbox):
         sign_in(c, "owner@example.com")
         yield c
     api.app.dependency_overrides.clear()
+
+
+def runs(aoi_id: int) -> list[db.JobRun]:
+    with db.session() as s:
+        return list(
+            s.scalars(select(db.JobRun).where(db.JobRun.aoi_id == aoi_id).order_by(db.JobRun.id))
+        )
 
 
 def create(client, polygon) -> dict:
@@ -205,6 +212,13 @@ def test_backfill_end_to_end(client, aoi_polygon, make_scene, monkeypatch):
     jobs.backfill(aoi_id, model=lambda red, green, nir: (red * 0).astype("uint8"))
     assert client.get(f"/aois/{aoi_id}").json() == detail
 
+    # Each run is recorded with what it read: everything, then nothing new.
+    first, second = runs(aoi_id)
+    assert (first.status, first.passes_read, first.passes_failed) == ("ok", 4, 0)
+    assert first.bytes_read == detail["bytes_read"] and first.fallback_passes == 0
+    assert (second.status, second.passes_read, second.bytes_read) == ("ok", 0, 0)
+    assert first.finished_utc >= first.started_utc
+
 
 def test_failed_backfill_is_recorded_and_can_be_retried(client, aoi_polygon, monkeypatch):
     def down(*args, **kwargs):
@@ -216,6 +230,8 @@ def test_failed_backfill_is_recorded_and_can_be_retried(client, aoi_polygon, mon
         jobs.backfill(aoi_id, model=lambda *bands: None)
     progress = client.get(f"/aois/{aoi_id}/progress").json()
     assert progress["stage"] == "failed" and "no catalog answered" in progress["error"]
+    (run,) = runs(aoi_id)
+    assert run.status == "failed" and "no catalog answered" in run.error
 
     assert client.post(f"/aois/{aoi_id}/backfill").status_code == 202
     assert client.post(f"/aois/{aoi_id}/backfill").status_code == 409  # already queued
@@ -357,7 +373,7 @@ def test_sign_in_by_emailed_link(data_dir, outbox):
         assert r.status_code == 303 and r.headers["location"] == settings().web_url
         cookie = r.headers["set-cookie"].lower()
         assert "httponly" in cookie and "samesite=lax" in cookie
-        assert c.get("/auth/me").json() == {"email": "me@example.com"}
+        assert c.get("/auth/me").json() == {"email": "me@example.com", "admin": False}
 
         assert c.post("/auth/logout").status_code == 204
         assert c.get("/auth/me").status_code == 401
@@ -606,3 +622,69 @@ def test_polling_queues_each_watched_idle_aoi_once(client, aoi_polygon):
     assert jobs.poll_watched(queued.append) == [watched]
     assert jobs.poll_watched(queued.append) == []  # queued already: not twice
     assert queued == [watched]
+
+
+def test_the_admin_view_measures_precision_and_health_for_admins_only(
+    client, detected, monkeypatch
+):
+    from orbitdiff import monitoring, notify
+
+    aoi_id, grid, sync = detected
+    assert client.get("/auth/me").json()["admin"] is False
+    assert client.get("/admin/summary").status_code == 403
+    monkeypatch.setattr(settings(), "admin_emails", ["Owner@Example.com"])
+    assert client.get("/auth/me").json()["admin"] is True
+
+    client.put(f"/aois/{aoi_id}/alert-rule", json=RULE | {"enabled": True})
+    watch_from(aoi_id, "2021-05-01")
+    sync(
+        make_event(grid, slice(10, 20), "2021-05", ("pending", "A", "2021-05-05T09:00")),
+        make_event(grid, slice(40, 50), "2021-05", ("pending", "B", "2021-05-06T09:00")),
+    )
+    assert notify.notify(aoi_id) == 2
+    first, _ = client.get(f"/aois/{aoi_id}/events").json()
+    client.post(f"/aois/{aoi_id}/events/{first['id']}/feedback")
+    with db.session() as s:
+        s.add_all(
+            [
+                db.JobRun(
+                    aoi_id=aoi_id,
+                    started_utc=datetime.now(UTC) - timedelta(minutes=10),
+                    finished_utc=datetime.now(UTC),
+                    status="failed",
+                    error="RuntimeError: no catalog answered",
+                    passes_read=3,
+                    passes_failed=1,
+                    fallback_passes=2,
+                    bytes_read=1000,
+                    emails_sent=0,
+                ),
+            ]
+        )
+
+    summary = client.get("/admin/summary").json()
+    (row,) = summary["precision"]
+    assert (row["category"], row["alerts"], row["not_real"], row["precision"]) == (
+        "vegetation_loss",
+        2,
+        1,
+        0.5,
+    )
+    assert row["flagged"] is False  # under min_alerts: too few to say
+    health = summary["health"]
+    assert (health["runs"], health["failed_runs"], health["fallback_passes"]) == (1, 1, 2)
+    assert health["median_run_minutes"] == pytest.approx(10, abs=0.1)
+    assert (health["emails_sent"], health["emails_stuck"], health["feedback"]) == (2, 0, 1)
+    assert health["median_alert_hours"] > 24 * 365  # passes from 2021, sent today
+    assert summary["failures"][0]["aoi_id"] == aoi_id
+    assert summary["production_version"].startswith("production-")
+    assert "owner@example.com" not in str(summary)  # aggregate only
+
+    # Enough alerts below the bar flag the category for review.
+    cfg = pipeline_config()
+    strict = cfg.model_copy(
+        update={"monitoring": cfg.monitoring.model_copy(update={"min_alerts": 2})}
+    )
+    with db.session() as s:
+        (flagged,) = monitoring.summary(s, strict, datetime.now(UTC)).precision
+    assert flagged.flagged

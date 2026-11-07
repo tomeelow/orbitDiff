@@ -18,7 +18,7 @@ from loguru import logger
 from redis import Redis
 from rq import Queue
 from shapely.geometry.base import BaseGeometry
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -74,6 +74,30 @@ def _set(aoi_id: int, **values: object) -> None:
         s.execute(update(db.Aoi).where(db.Aoi.id == aoi_id).values(**values))
 
 
+def _start_run(aoi_id: int) -> int:
+    with db.session() as s:
+        run = db.JobRun(aoi_id=aoi_id, started_utc=datetime.now(UTC), status="running")
+        s.add(run)
+        s.flush()
+        return run.id
+
+
+def _finish_run(run_id: int, status: str, **values: object) -> None:
+    with db.session() as s:
+        s.execute(
+            update(db.JobRun)
+            .where(db.JobRun.id == run_id)
+            .values(status=status, finished_utc=datetime.now(UTC), **values)
+        )
+
+
+def _passes_from(aoi_id: int, catalog_name: str) -> int:
+    with db.session() as s:
+        return s.scalar(
+            select(func.count()).where(db.Scene.aoi_id == aoi_id, db.Scene.catalog == catalog_name)
+        )
+
+
 def backfill(aoi_id: int, model: masking.CloudModel | None = None) -> None:
     cfg, data_dir = pipeline_config(), settings().data_dir
     with db.session() as s:
@@ -87,9 +111,20 @@ def backfill(aoi_id: int, model: masking.CloudModel | None = None) -> None:
         if done % PROGRESS_EVERY == 0 or done == total:
             _set(aoi_id, progress_done=done, progress_total=total)
 
+    run = _start_run(aoi_id)
+    fallback = cfg.catalog.fallback.name
+    from_fallback = _passes_from(aoi_id, fallback)
+    stats: dict[str, int] = {}
     try:
         _set(aoi_id, stage="reading", progress_done=0, progress_total=0, error=None)
-        fetch_aoi(grid, start, datetime.now(UTC).date(), cfg, data_dir, on_progress=progress)
+        fetched = fetch_aoi(
+            grid, start, datetime.now(UTC).date(), cfg, data_dir, on_progress=progress
+        )
+        stats = {
+            "passes_read": fetched.full + fetched.scl_only + fetched.tile_cloud,
+            "passes_failed": fetched.failed,
+            "bytes_read": fetched.bytes_read,
+        }
         _set(aoi_id, stage="masking")
         if model is None:
             model = masking.omnicloudmask(cfg.masking.cloud_model_version, data_dir / "models")
@@ -97,15 +132,23 @@ def backfill(aoi_id: int, model: masking.CloudModel | None = None) -> None:
         _set(aoi_id, stage="compositing")
         composites.update_composites(grid.aoi_id, cfg, data_dir)
         sync_records(aoi_id, cfg, data_dir)
+        stats["fallback_passes"] = _passes_from(aoi_id, fallback) - from_fallback
         _set(aoi_id, stage="detecting")
         sync_events(aoi_id, cfg, data_dir)
         _set(aoi_id, stage="ready")
     except Exception as exc:
-        _set(aoi_id, stage="failed", error=f"{type(exc).__name__}: {exc}")
+        error = f"{type(exc).__name__}: {exc}"
+        _set(aoi_id, stage="failed", error=error)
+        _finish_run(run, "failed", error=error[:500], **stats)
         raise
-    # After "ready": the archive is complete either way, and a failed email is retried on
-    # the next run, not reported as a failed backfill.
-    notify.notify(aoi_id)
+    # After "ready": the archive is complete either way. A failed email is retried on the
+    # next run; only an error in sending itself (the database, say) fails the run.
+    try:
+        stats["emails_sent"] = notify.notify(aoi_id)
+    except Exception as exc:
+        _finish_run(run, "failed", error=f"sending: {type(exc).__name__}: {exc}"[:500], **stats)
+        raise
+    _finish_run(run, "ok", **stats)
 
 
 def _mask_stats(ds, masks, grid: AOIGrid, cfg: PipelineConfig) -> dict[str, tuple[float, bool]]:

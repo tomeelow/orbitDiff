@@ -120,6 +120,43 @@ export interface RulePreview {
   retracted: number; // of those, later dismissed or found seasonal
 }
 
+export interface Me {
+  email: string;
+  admin: boolean; // sees the admin view
+}
+
+/** The admin view: aggregate only, no names, places or addresses (monitoring.py). */
+export interface AdminSummary {
+  production_version: string;
+  precision_days: number;
+  health_days: number;
+  min_precision: number;
+  min_alerts: number; // fewer alerts than this: too few to flag
+  precision: {
+    method_version: string;
+    category: Category;
+    alerts: number;
+    not_real: number;
+    precision: number;
+    flagged: boolean;
+  }[];
+  health: {
+    runs: number;
+    failed_runs: number;
+    passes_read: number;
+    passes_failed: number;
+    fallback_passes: number;
+    bytes_read: number;
+    median_run_minutes: number | null;
+    emails_sent: number;
+    emails_failed: number;
+    emails_stuck: number;
+    median_alert_hours: number | null;
+    feedback: number;
+  };
+  failures: { aoi_id: number; finished_utc: string; error: string }[];
+}
+
 export interface Limits {
   max_area_km2: number;
 }
@@ -184,7 +221,8 @@ export const api = {
       ...json("POST", settings),
       signal,
     }),
-  me: () => request<{ email: string }>("/auth/me"),
+  me: () => request<Me>("/auth/me"),
+  adminSummary: () => request<AdminSummary>("/admin/summary"),
   signIn: (email: string) => request<{ minutes: number }>("/auth/login", json("POST", { email })),
   signOut: () => request<void>("/auth/logout", { method: "POST" }),
 };

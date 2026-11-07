@@ -991,6 +991,60 @@ input[type="range"] {
   vertical-align: 0.15em;
 }
 
+/* ---- admin ---- */
+.admin-section {
+  margin-top: var(--space-xl);
+  padding-top: var(--space-md);
+  border-top: var(--rule-hair) solid var(--color-rule);
+}
+.admin-section > h2 {
+  margin-bottom: var(--space-xs);
+}
+.admin-section > p {
+  max-width: 72ch;
+  margin-bottom: var(--space-sm);
+}
+.table-scroll {
+  overflow-x: auto;
+}
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+.table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--color-muted);
+}
+.table th,
+.table td {
+  padding: var(--space-xs) var(--space-sm) var(--space-xs) 0;
+  border-bottom: var(--rule-hair) solid var(--color-rule-2);
+  white-space: nowrap;
+}
+.table .num {
+  text-align: right;
+}
+.table .change-dot {
+  display: inline-block; /* sized only in flex rows otherwise */
+  margin-right: var(--space-2xs);
+}
+.failures {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: var(--text-sm);
+}
+.failures li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-md);
+  padding: var(--space-xs) 0;
+  border-bottom: var(--rule-hair) solid var(--color-rule-2);
+  overflow-wrap: anywhere;
+}
+
 .progress {
   position: relative;
   height: 4px;

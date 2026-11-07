@@ -111,6 +111,7 @@ def _claim(event: db.Event, user_id: int, kind: str, max_attempts: int) -> int |
         state="claimed",
         attempts=1,
         claimed_utc=now,
+        pass_utc=event.status_utc,
     )
     stmt = stmt.on_conflict_do_update(
         index_elements=["event_id", "user_id", "kind"],
@@ -118,6 +119,7 @@ def _claim(event: db.Event, user_id: int, kind: str, max_attempts: int) -> int |
             "state": "claimed",
             "attempts": db.Notification.attempts + 1,
             "event_status": event.status,
+            "pass_utc": event.status_utc,
             "claimed_utc": now,
             "error": None,
         },
