@@ -1,4 +1,4 @@
-"""Command line entry points: `orbitdiff fetch ...`."""
+"""Command line entry points: `orbitdiff fetch|mask|mask-report ...`."""
 
 import argparse
 import sys
@@ -7,6 +7,7 @@ from pathlib import Path
 
 from loguru import logger
 
+from orbitdiff import mask_report, masking
 from orbitdiff.aoi import load_geometry, make_grid
 from orbitdiff.config import pipeline_config, settings
 from orbitdiff.fetch import fetch_aoi
@@ -29,6 +30,21 @@ def _fetch(args: argparse.Namespace) -> None:
     print(summary.report())
 
 
+def _mask(args: argparse.Namespace) -> None:
+    cfg = pipeline_config().masking
+    model = masking.omnicloudmask(cfg.cloud_model_version, settings().data_dir / "models")
+    print(masking.update_masks(args.id, cfg, settings().data_dir, model))
+
+
+def _mask_report(args: argparse.Namespace) -> None:
+    path, scores = mask_report.write_report(args.id, pipeline_config().masking, settings().data_dir)
+    for s in scores:
+        print(
+            f"{s.method}: lets through {s.let_through}, throws away {s.thrown_away} of {s.labelled}"
+        )
+    print(f"report: {path}")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="orbitdiff")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -39,6 +55,14 @@ def main(argv: list[str] | None = None) -> None:
     fetch.add_argument("--start", type=date.fromisoformat, help="default: archive start in config")
     fetch.add_argument("--end", type=date.fromisoformat, help="default: today (UTC)")
     fetch.set_defaults(run=_fetch)
+
+    mask = sub.add_parser("mask", help="run the cloud model on new passes (needs the ml group)")
+    mask.add_argument("--id", required=True, help="AOI id")
+    mask.set_defaults(run=_mask)
+
+    report = sub.add_parser("mask-report", help="contact sheet: SCL alone vs SCL + model")
+    report.add_argument("--id", required=True, help="AOI id")
+    report.set_defaults(run=_mask_report)
 
     args = parser.parse_args(argv)
     logger.remove()

@@ -54,3 +54,6 @@ dev = [
     "pytest==9.2.0",
     "ruff==0.17.4",
 ]
+ml = [
+    "omnicloudmask==1.8.0",
+]

@@ -13,6 +13,8 @@ from pathlib import Path
 
 import numpy as np
 import xarray as xr
+from rasterio.transform import Affine
+from shapely import wkt
 
 from orbitdiff.aoi import RESOLUTION_M, AOIGrid
 from orbitdiff.catalog import PassKey
@@ -86,12 +88,13 @@ def to_dataset(reads: Sequence[PassRead], grid: AOIGrid) -> xr.Dataset:
 
 
 def append(path: Path, ds: xr.Dataset) -> None:
+    """Append passes along time; the first call creates the store. Also used for mask stores."""
     if path.exists():
         ds.to_zarr(path, append_dim="time", consolidated=False)
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     chunks = (TIME_CHUNK, ds.sizes["y"], ds.sizes["x"])
-    encoding = {v: {"chunks": chunks} for v in [*BANDS, "scl"]}
+    encoding = {v: {"chunks": chunks} for v in ds.data_vars if ds[v].dims == ("time", "y", "x")}
     # Fixed units: otherwise xarray picks them from the first batch, and a later batch
     # with an earlier or finer-grained time can't be encoded.
     encoding["time"] = {"units": "microseconds since 1970-01-01", "dtype": "int64"}
@@ -109,6 +112,18 @@ def matches_grid(ds: xr.Dataset, grid: AOIGrid) -> bool:
         ds.attrs["epsg"] == grid.epsg
         and np.allclose(ds.attrs["transform"], list(grid.transform)[:6])
         and (ds.sizes["y"], ds.sizes["x"]) == (grid.height, grid.width)
+    )
+
+
+def grid_of(ds: xr.Dataset) -> AOIGrid:
+    """The grid a cube was built on, from its own attributes."""
+    return AOIGrid(
+        aoi_id=ds.attrs["aoi_id"],
+        geometry=wkt.loads(ds.attrs["aoi_wkt"]),
+        epsg=ds.attrs["epsg"],
+        transform=Affine(*ds.attrs["transform"]),
+        width=ds.sizes["x"],
+        height=ds.sizes["y"],
     )
 
 

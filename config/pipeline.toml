@@ -30,6 +30,10 @@ workers = 16                      # concurrent window reads: latency, not bandwi
 scl_drop = [0, 1, 3, 8, 9, 10]    # no data, defective, cloud shadow, cloud medium/high, thin cirrus
 scl_flag = [11]                   # snow: kept, flagged
 scene_min_clear_frac = 0.6        # a pass "counts" as clear for the AOI above this
+dilate_px = 2                     # grow clouds and shadows by 20 m (one SCL pixel); edges fail first
+cloud_model = "omnicloudmask"     # learned model on top of SCL, for haze and thin cirrus
+cloud_model_version = 4.0         # pinned: a new version means rerunning every AOI's masks
+cloud_model_classes = [1, 2, 3]   # model classes masked: thick cloud, thin cloud, shadow
 
 [detection]
 min_mapping_unit_ha = 0.1         # floor under the user's "smallest change" slider (10 pixels)
