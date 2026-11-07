@@ -77,7 +77,7 @@ polygon → STAC search → windowed COG reads → cloud masking → monthly com
 | 9–10. Watching, alerts, feedback, monitoring | planned |
 | 11–12. Deployment, documentation | planned |
 
-`mockup/orbit-diff.html` is the UX reference (synthetic imagery and events).
+`mockup/orbit-diff.html` is an early sketch of the UI (synthetic imagery and events), not its final design.
 
 ## Stack
 
@@ -154,7 +154,7 @@ config/          pipeline.toml
 migrations/      Alembic migrations
 spikes/          scripts behind the findings in docs/spikes.md
 docs/            implementation plan, ADRs, spike results
-mockup/          the UX reference
+mockup/          an early UI sketch
 docker/          TiTiler colormap
 examples/        a sample AOI
 ```
