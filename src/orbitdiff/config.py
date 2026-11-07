@@ -59,6 +59,10 @@ class MaskingConfig(_Section):
     scl_drop: frozenset[int]
     scl_flag: frozenset[int]
     scene_min_clear_frac: float = Field(ge=0, le=1)
+    dilate_px: int = Field(ge=0)
+    cloud_model: str
+    cloud_model_version: float
+    cloud_model_classes: frozenset[int]
 
     @model_validator(mode="after")
     def _known_disjoint_classes(self) -> Self:

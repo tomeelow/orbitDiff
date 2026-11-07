@@ -256,6 +256,8 @@ AWS_NO_SIGN_REQUEST=YES
 
 **Deliverable:** `masking/` producing clear masks, plus a small report of how many residual-cloud scenes each method lets through.
 
+> **As built (2026-11-07):** `orbitdiff.masking` (SCL with no-data kept out of the dilation, OmniCloudMask v4.0 pinned in config, both dilated by `dilate_px`) and `orbitdiff mask --id <aoi>`, which runs the model only on passes it hasn't seen and stores its raw classes in `data/masks/<aoi>.zarr`. A composite refuses a pass with bands but no model output rather than quietly using SCL alone. `orbitdiff mask-report --id <aoi>` writes a contact sheet and a `passes.csv` to label; there are no labels yet, so the report doesn't yet say which method lets fewer cloudy scenes through. On the spike AOI (Jun–Sep 2021, 32 passes with bands) the model masks a further 12–22% of the AOI on 4 partly cloudy passes, mostly hazy cloud edges SCL leaves in.
+
 ---
 
 ## Phase 3 — Monthly Composites
