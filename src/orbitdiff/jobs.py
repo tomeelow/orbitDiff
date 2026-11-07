@@ -10,6 +10,7 @@ import math
 import time
 from collections.abc import Callable
 from datetime import UTC, date, datetime
+from functools import cache
 from pathlib import Path
 
 import numpy as np
@@ -22,7 +23,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from orbitdiff import composites, cube, db, detection, masking, notify, render
+from orbitdiff import buildings, composites, cube, db, detection, masking, notify, render
 from orbitdiff.aoi import AOIGrid, reproject
 from orbitdiff.config import PipelineConfig, pipeline_config, settings
 from orbitdiff.fetch import fetch_aoi
@@ -271,6 +272,17 @@ def _match(
     return rows
 
 
+@cache
+def _champion(data_dir: Path, threshold: float) -> detection.Learned | None:
+    """The promoted building model, loaded once per worker: a promotion takes effect when
+    the worker restarts. None until one is promoted."""
+    predictor = buildings.load_champion(data_dir)
+    if predictor is None:
+        return None
+    logger.info("building model: {} (threshold {})", predictor.version, threshold)
+    return detection.Learned(predictor, threshold)
+
+
 def sync_events(aoi_id: int, cfg: PipelineConfig, data_dir: Path) -> None:
     """Run the production method over the AOI's whole archive and reconcile its events with
     the stored ones. Detection is a replay, so the backfill and a single new pass go through
@@ -281,7 +293,9 @@ def sync_events(aoi_id: int, cfg: PipelineConfig, data_dir: Path) -> None:
     key = str(aoi_id)
     with db.session() as s:
         grid = s.get(db.Aoi, aoi_id).grid()
-    method = detection.methods(cfg.detection)[detection.PRODUCTION]
+    method = detection.methods(cfg.detection, _champion(data_dir, cfg.buildings.threshold))[
+        detection.PRODUCTION
+    ]
     found = detection.detect(
         detection.load_stack(data_dir, key),
         detection.Passes(data_dir, key, cfg.masking),
@@ -317,7 +331,7 @@ def sync_events(aoi_id: int, cfg: PipelineConfig, data_dir: Path) -> None:
                 ],
                 "items": e.items,
                 "method_version": version,
-                "thresholds": cfg.detection.model_dump(),
+                "thresholds": detection.thresholds(method, cfg.detection),
             }
             row = rows.get(i)
             if row is None:

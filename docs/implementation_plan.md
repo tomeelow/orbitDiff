@@ -45,7 +45,7 @@
 |---|---|---|---|
 | **Sentinel-2 L2A** | Surface reflectance, 10 m, every ~5 days. The imagery | Earth Search STAC (Element 84), COGs on AWS | Free, **no key** |
 | **Sentinel-2 L2A (fallback)** | Same product as COGs, on Azure (ADR-002) | Microsoft Planetary Computer (PC) STAC | Free; anonymous SAS token |
-| **OSCD** | 24 Sentinel-2 image pairs with urban change labels | Onera Satellite Change Detection dataset (via TorchGeo) | Free, research use |
+| **OSCD** | 24 Sentinel-2 image pairs with urban change labels | Onera Satellite Change Detection dataset, from the mirror TorchGeo pins (read directly, without TorchGeo) | Free, CC BY-NC-SA 4.0 (non-commercial) |
 | **CloudSEN12** | Labelled Sentinel-2 cloud and shadow masks | CloudSEN12 dataset | Free; only if we train our own cloud model |
 | **Hansen Global Forest Change** | Annual tree-cover loss, 30 m, global | University of Maryland / GLAD | Free; cross-check for forest-loss events |
 | **Basemap labels** | Place names and roads for context | OpenFreeMap or Protomaps | Free |
@@ -494,6 +494,19 @@ Only a passing candidate gets the `champion` alias. The worker loads the champio
 CPU is fine for small AOIs. Keep PyTorch in a separate worker image so the API image stays small.
 
 **Deliverable:** a registered model that beats the baseline on buildings in our evaluation set, a documented gate, and per-event model versions.
+
+> **As built (2026-11-07), all but the evaluation-set comparison:**
+> - **Data.** OSCD is read directly with rasterio (`orbitdiff.oscd`) from the mirror TorchGeo pins, checked by SHA-256. TorchGeo itself would bring about 15 packages (Lightning, Kornia, Lightly, GeoPandas, …) for a loader of 50 lines. The split is OSCD's own `train.txt`/`test.txt`. Validation cities (Nantes, Hong Kong, Águas Claras) come out of the train cities, and model selection never sees a test city. Licence CC BY-NC-SA 4.0: the trained weights are for non-commercial use.
+> - **Model.** FC-Siam-diff (`orbitdiff.siamese`), 863k parameters, trained from scratch: TorchGeo's pretrained Sentinel-2 encoders are for 13 bands or RGB, not our four. Inputs are B02, B03, B04 and B08, each image standardised per band over the pixels seen on both dates.
+> - **Train–serve skew.** Standardising takes out a per-band gain and offset, which is most of the difference between L1C and L2A (a test shows L1C-like and L2A-like inputs coming out the same). What's left is measured in `docs/spikes.md`, section 6. The model's event-level numbers on L2A come from the evaluation set once it is verified.
+> - **Results (version 1).** Seed 7, 3,000 steps of 16 crops of 96 px, kept at step 2,250 by validation F1, trained in 19 minutes on a laptop CPU. A second run reproduced it exactly.
+>   - Validation F1: 0.416.
+>   - OSCD test: pixel F1 0.392 (precision 0.481, recall 0.332). Per city it runs from 0.05 (Valencia, 0.4% changed) to 0.73 (Montpellier).
+>   - It isn't tuned further: the test cities may not steer it, and the gate on the evaluation set decides whether it ships.
+>   - On L2A, Grünheide's yearly flagged-pixel rate is 0.5–0.8% before the Tesla factory, 6–9% while it was built, and about 2% since (`docs/spikes.md`, section 6).
+> - **Serving.** The model is one more detector (`detection.Learned`) in the one detection path, so its changes go through the opening, the minimum mapping unit, the false-alert rules and confirmation like any other. It joins production only as the promoted champion. Without one, every method and its version are unchanged. With one, events record it: `production-<hash>+orbitdiff_buildings/<version>`, and its threshold in `thresholds`. Verdicts are kept per pair of images, which brings production detection over ten years of Grünheide from 1,449 model calls to 373.
+> - **Promotion.** `orbitdiff promote --version N` runs the plan's gate on the evaluation set: production with the candidate against production with the champion, and the naive baseline. It refuses outright while the set has unverified or no labels, which is today. A promotion writes `data/models/buildings/champion.json` and the weights, which every worker reads at start-up (Docker included, through `./data`), and sets the `champion` alias in the MLflow registry.
+> - **Not yet:** the evaluation-set comparison with the baseline, which waits for verified labels; feedback labels as extra negatives; the L2A gap measured on OSCD's one test city with both dates inside the L2A archive (Chongqing, 2017-04 and 2018-04).
 
 ---
 
