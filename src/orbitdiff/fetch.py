@@ -1,8 +1,9 @@
 """Bring an AOI's cube up to date: search, keep one item per pass, read what's missing.
 
 Running it again only reads passes the cube doesn't have yet, so the same function does
-the archive backfill and later incremental updates. Passes that fail to read are left
-out and retried on the next run.
+the archive backfill and later incremental updates. A pass that fails to read (a dropped
+connection, a throttled request) is tried again after a pause, a few rounds with growing
+pauses; one that still fails is left out and retried on the next run.
 """
 
 import time
@@ -31,7 +32,7 @@ class FetchSummary:
     full: int  # SCL + 10 m bands read
     scl_only: int  # SCL read, AOI too cloudy for the bands
     tile_cloud: int  # skipped on tile cloud cover, nothing read
-    failed: int  # every candidate failed; retried next run
+    failed: int  # every candidate failed in every round; retried next run
     bytes_read: int
     full_bytes: int  # what the same assets weigh as whole files
     seconds: float
@@ -84,26 +85,44 @@ def fetch_aoi(
     bytes_read = full_bytes = 0
     batch: list[reading.PassRead] = []
     grid.mask  # noqa: B018 - rasterize once here, not concurrently in every worker
+    pending, settled, rounds = todo, 0, cfg.reading.retry_rounds
     with ThreadPoolExecutor(cfg.reading.workers) as pool:
-        futures = {pool.submit(read, candidates): candidates for candidates in todo}
-        for n, future in enumerate(as_completed(futures), 1):
-            try:
-                result = future.result()
-            except Exception as exc:  # one pass must not sink the backfill
-                logger.warning("pass {} failed: {!r}", futures[future][0].item_id, exc)
-                result = None
-            if result is None:
-                counts["failed"] += 1
-            else:
-                counts[result.status] += 1
-                bytes_read += result.bytes_read
-                full_bytes += result.full_bytes
-                batch.append(result)
-            if len(batch) >= WRITE_EVERY:
-                cube.append(path, cube.to_dataset(batch, grid))
-                batch = []
-            if on_progress:
-                on_progress(n, len(todo))
+        for attempt in range(rounds + 1):
+            if attempt:
+                wait = cfg.reading.retry_wait_s * 2 ** (attempt - 1)
+                logger.warning(
+                    "{}: {} passes failed to read; retrying in {:.0f}s",
+                    grid.aoi_id,
+                    len(pending),
+                    wait,
+                )
+                time.sleep(wait)
+            futures = {pool.submit(read, candidates): candidates for candidates in pending}
+            pending = []
+            for future in as_completed(futures):
+                try:
+                    result = future.result()
+                except Exception as exc:  # one pass must not sink the backfill
+                    logger.warning("pass {} failed: {!r}", futures[future][0].item_id, exc)
+                    result = None
+                if result is None:
+                    pending.append(futures[future])
+                    if attempt < rounds:
+                        continue  # not settled yet: it gets another round
+                else:
+                    counts[result.status] += 1
+                    bytes_read += result.bytes_read
+                    full_bytes += result.full_bytes
+                    batch.append(result)
+                settled += 1
+                if len(batch) >= WRITE_EVERY:
+                    cube.append(path, cube.to_dataset(batch, grid))
+                    batch = []
+                if on_progress:
+                    on_progress(settled, len(todo))
+            if not pending:
+                break
+    counts["failed"] = len(pending)
     if batch:
         cube.append(path, cube.to_dataset(batch, grid))
 
