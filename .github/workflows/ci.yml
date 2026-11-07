@@ -87,8 +87,7 @@ jobs:
         run: pnpm exec vite build
 
   images:
-    # The API and web images build. The worker image is the same Dockerfile plus the ml
-    # group (PyTorch, several GB), so it's left to local builds.
+    # The images build, and each imports what it runs. The worker's PyTorch is CPU-only.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -97,7 +96,12 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Build
-        run: docker compose build api web
+        run: docker compose build api worker web
 
       - name: The API imports in its image
         run: docker run --rm orbitdiff-app python -c "import orbitdiff.api"
+
+      - name: The worker has the cloud model, without CUDA
+        run: >
+          docker run --rm orbitdiff-worker python -c
+          "import omnicloudmask, torch; assert torch.version.cuda is None, torch.version.cuda"

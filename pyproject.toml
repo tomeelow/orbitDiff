@@ -67,4 +67,17 @@ dev = [
 ml = [
     "mlflow-skinny==3.18.0",
     "omnicloudmask==1.8.0",
+    # OmniCloudMask's own, named here to come from PyTorch's CPU-only index on Linux:
+    # the worker has no GPU, and the CUDA wheels add about 5 GB to its image.
+    "torch==2.15.0",
+    "torchvision==0.29.2",
 ]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu", marker = "sys_platform == 'linux'" }
+torchvision = { index = "pytorch-cpu", marker = "sys_platform == 'linux'" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true  # only torch and torchvision come from it
