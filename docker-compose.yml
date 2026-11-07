@@ -1,0 +1,30 @@
+# Local infrastructure. Application services (api, worker, scheduler, titiler, web) are
+# added in the phase that builds them; see docs/implementation_plan.md, Phase 11.
+#
+# Object storage is not here: in development the AOI cubes and composites go to a local
+# directory, and only deployments point at S3-compatible storage.
+
+services:
+  db:
+    image: postgis/postgis:17-3.7
+    environment:
+      POSTGRES_USER: orbitdiff
+      POSTGRES_PASSWORD: orbitdiff   # development only
+      POSTGRES_DB: orbitdiff
+    ports: ["5432:5432"]
+    volumes: [pg:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orbitdiff"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:8.6
+    ports: ["6379:6379"]
+
+  mailpit:                           # catches every email in development: http://localhost:8025
+    image: axllent/mailpit:v1.32.0
+    ports: ["1025:1025", "8025:8025"]
+
+volumes:
+  pg:
