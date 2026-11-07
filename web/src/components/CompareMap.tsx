@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   type AoiDetail,
   type ChangeEvent,
+  type LabelChange,
   type Month,
   pointReadout,
   type Scene,
@@ -10,13 +11,15 @@ import {
 } from "../api";
 import type { Theme } from "../hooks";
 import { formatLonLat, formatUtc } from "../lib/format";
-import { type Bounds, boundsOf, type LonLat } from "../lib/geo";
+import { type Bounds, boundsOf, type LonLat, type Polygon } from "../lib/geo";
 import { monthKey, monthLabel } from "../lib/months";
 import { intersect, tilesCovering, tileUrl } from "../lib/tiles";
 import {
   addOutline,
   createMap,
+  drawPolygons,
   setChanges,
+  setLabels,
   setPassImage,
   setRaster,
   swapBasemap,
@@ -24,6 +27,10 @@ import {
 } from "../map";
 
 export type Layer = "true_color" | "ndvi";
+
+// Defaults that keep their identity between renders, so the layers aren't redrawn each time.
+const NO_CHANGES: ChangeEvent[] = [];
+const NO_LABELS: LabelChange[] = [];
 
 interface Props {
   area: AoiDetail;
@@ -36,6 +43,9 @@ interface Props {
   changes?: ChangeEvent[]; // footprints drawn on both months
   selected?: number | null; // the change in focus: drawn filled, and the map fits it
   onPick?: (id: number) => void; // a footprint was clicked
+  labels?: LabelChange[]; // evaluation labels, drawn on both months
+  drawing?: boolean; // draw one polygon on B, then report it with onDrawn
+  onDrawn?: (footprint: Polygon) => void;
 }
 
 interface Readout {
@@ -54,9 +64,12 @@ export function CompareMap({
   pass,
   next,
   theme,
-  changes = [],
+  changes = NO_CHANGES,
   selected = null,
   onPick,
+  labels = NO_LABELS,
+  drawing = false,
+  onDrawn,
 }: Props) {
   const aRef = useRef<HTMLDivElement>(null);
   const bRef = useRef<HTMLDivElement>(null);
@@ -70,8 +83,8 @@ export function CompareMap({
   const compare = a !== null;
 
   // What the hover handler needs, without re-binding it every render.
-  const live = useRef({ a, b, pass, split, compare, onPick });
-  live.current = { a, b, pass, split, compare, onPick };
+  const live = useRef({ a, b, pass, split, compare, onPick, onDrawn });
+  live.current = { a, b, pass, split, compare, onPick, onDrawn };
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: the maps are built once per area
   useEffect(() => {
@@ -180,6 +193,24 @@ export function CompareMap({
       whenStyleReady(map, () => setChanges(map, changes, selected));
   }, [ready, changes, selected]);
 
+  useEffect(() => {
+    const current = maps.current;
+    if (!ready || !current) return;
+    for (const map of [current.a, current.b]) whenStyleReady(map, () => setLabels(map, labels));
+  }, [ready, labels]);
+
+  // Draw one footprint on B. The parent ends drawing when it has it, which removes Terra Draw.
+  useEffect(() => {
+    const map = maps.current?.b;
+    if (!ready || !map || !drawing) return;
+    const draw = drawPolygons(map);
+    draw.on("finish", (id) => {
+      const feature = draw.getSnapshot().find((f) => f.id === id);
+      if (feature?.geometry.type === "Polygon") live.current.onDrawn?.(feature.geometry as Polygon);
+    });
+    return () => draw.stop();
+  }, [ready, drawing]);
+
   // Bring the selected change into view, with its surroundings.
   const focus = changes.find((e) => e.id === selected)?.geometry;
   useEffect(() => {
@@ -244,11 +275,11 @@ export function CompareMap({
       <div
         className="compare-map compare-a"
         ref={aRef}
-        hidden={!compare}
+        hidden={!compare || drawing} // draw on B's imagery alone
         style={{ clipPath: `inset(0 ${100 - split}% 0 0)` }}
         aria-hidden="true"
       />
-      {compare && a && (
+      {compare && !drawing && a && (
         <span className="map-tag map-tag-a">
           <b>A</b>
           {monthLabel(monthKey(a.month))}
@@ -260,7 +291,7 @@ export function CompareMap({
           {bLabel}
         </span>
       )}
-      {compare && (
+      {compare && !drawing && (
         <div
           className="divider"
           style={{ left: `${split}%` }}

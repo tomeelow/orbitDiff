@@ -32,7 +32,9 @@ export function App() {
           {route.page === "areas" && <AreasPage />}
           {route.page === "new" && <DrawPage theme={theme} />}
           {route.page === "admin" && <AdminPage admin={admin} />}
-          {route.page === "area" && <AreaPage id={route.id} change={route.change} theme={theme} />}
+          {route.page === "area" && (
+            <AreaPage id={route.id} change={route.change} theme={theme} admin={admin} />
+          )}
         </ErrorBoundary>
       )}
     </>

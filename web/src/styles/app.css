@@ -1149,3 +1149,40 @@ input[type="range"] {
     left: 48px;
   }
 }
+
+/* ---- evaluation labels ---- */
+.labels fieldset {
+  margin: var(--space-md) 0 0;
+  padding: 0;
+  border: 0;
+}
+.labels legend {
+  margin-bottom: var(--space-2xs);
+  padding: 0;
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+}
+.labels fieldset label {
+  margin-top: var(--space-xs);
+}
+.labels fieldset.checks label {
+  margin: 0;
+}
+.label-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.label-list li {
+  display: grid;
+  grid-template-columns: auto 1fr 9.5rem;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-xs) 0;
+  border-bottom: var(--rule-hair) solid var(--color-rule-2);
+}
+.label-tools {
+  grid-column: 2 / -1;
+  display: flex;
+  gap: var(--space-xs);
+}

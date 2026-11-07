@@ -15,8 +15,10 @@ from orbitdiff.evaluation import (
     EvalAoi,
     Label,
     alerts_from,
+    dump_aoi,
     load_eval_set,
     metrics,
+    parse_aoi,
     score,
     table,
 )
@@ -109,6 +111,52 @@ def test_eval_files_load_and_any_edit_changes_the_version(tmp_path):
     assert site.evaluated_months == 96 - 12
     write("2020-03")
     assert load_eval_set(tmp_path)[1] != version
+
+
+def site(*events: tuple[str, str]) -> dict:
+    """An evaluation file's contents: 2017-01 to 2024-12, with (category, month) changes."""
+    return {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "geometry": mapping(box(13.77, 52.38, 13.82, 52.40)),
+                "properties": {"role": "aoi", "first_month": "2017-01", "last_month": "2024-12"},
+            },
+            *(
+                {
+                    "type": "Feature",
+                    "geometry": mapping(box(13.79, 52.39, 13.80, 52.395)),
+                    "properties": {"role": "event", "category": category, "month": month},
+                }
+                for category, month in events
+            ),
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    ("category", "month", "problem"),
+    [
+        ("vegetation_loss", "2017-06", "first year"),  # no anniversary: no method can find it
+        ("vegetation_loss", "2025-01", "not in 2017-01 to 2024-12"),
+        ("vegetation_loss", "2020-13", "not in"),
+        ("other", "2020-02", "unknown category"),  # a label says what changed
+    ],
+)
+def test_eval_files_refuse_labels_that_cant_be_scored(category, month, problem):
+    with pytest.raises(ValueError, match=problem):
+        parse_aoi("site", site(("buildings_roads", "2018-01"), (category, month)))
+
+
+def test_an_eval_file_is_written_one_feature_per_line_and_reads_back():
+    text = dump_aoi(site(("buildings_roads", "2018-01"), ("water", "2024-12")))
+    assert len(text.splitlines()) == 2 + 3  # header, the area, two changes, footer
+    aoi = parse_aoi("site", json.loads(text))
+    assert [(label.category, label.month) for label in aoi.labels] == [
+        ("buildings_roads", "2018-01"),
+        ("water", "2024-12"),
+    ]
 
 
 def event(category="vegetation_loss", area_px=100, history=()) -> Event:

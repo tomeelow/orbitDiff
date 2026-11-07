@@ -8,6 +8,7 @@ import { archiveYears } from "../lib/rules";
 import { AlertsCard } from "./Alerts";
 import { ChangesCard, type Shown } from "./Changes";
 import { CompareMap, type Layer } from "./CompareMap";
+import { LabelsCard, useLabelling } from "./Labels";
 import { BackfillCard, MonthCard, StatsCard } from "./Panels";
 import { ndviRange, Timeline, type TimelineMonth } from "./Timeline";
 import { ErrorState, LoadingState, Segmented } from "./ui";
@@ -19,10 +20,12 @@ export function AreaPage({
   id,
   change,
   theme,
+  admin,
 }: {
   id: number;
   change: number | null; // a change to open on, from an alert email's link
   theme: Theme;
+  admin: boolean; // may label the area for the evaluation set
 }) {
   const [detail, reload] = useLoad(() => api.area(id), [id]);
   const [progress, setProgress] = useState<Progress | null>(null);
@@ -106,6 +109,7 @@ export function AreaPage({
       area={data}
       change={change}
       theme={theme}
+      admin={admin}
       onUpdate={startBackfill}
       updating={updating}
       status={status}
@@ -152,6 +156,7 @@ function Archive({
   area,
   change,
   theme,
+  admin,
   onUpdate,
   updating,
   status,
@@ -159,6 +164,7 @@ function Archive({
   area: AoiDetail;
   change: number | null;
   theme: Theme;
+  admin: boolean;
   onUpdate: () => void;
   updating: boolean;
   status: Progress | null; // an update in progress
@@ -195,11 +201,19 @@ function Archive({
     const all = events.state === "done" ? events.data : [];
     return shown === "alerts" ? all.filter((e) => e.alerts) : all;
   }, [events, shown]);
+  // Labelling shows the labels in place of the detected changes, so they don't copy them.
+  const labelling = useLabelling(area.id, admin);
+  const labels = labelling.on ? labelling.draft?.changes : undefined;
+
   // Months with a change on show, in the colour of the latest one's category.
   const marks = useMemo(
     () =>
-      new Map([...changes].reverse().map((e) => [monthKey(e.month), CATEGORY[e.category].color])),
-    [changes],
+      new Map(
+        labels
+          ? labels.map((c) => [c.month, CATEGORY[c.category].color])
+          : [...changes].reverse().map((e) => [monthKey(e.month), CATEGORY[e.category].color]),
+      ),
+    [changes, labels],
   );
 
   // Default cursors once the months arrive, and again if they no longer exist.
@@ -390,9 +404,12 @@ function Archive({
           pass={chosenPass}
           next={next}
           theme={theme}
-          changes={changes}
-          selected={selected}
+          changes={labels ? undefined : changes}
+          selected={labels ? null : selected}
           onPick={(id) => selectChange(changes.find((e) => e.id === id) ?? null)}
+          labels={labels}
+          drawing={labelling.drawing}
+          onDrawn={(footprint) => labelling.add(footprint, b.key)}
         />
         <p className={note.tone === "warn" || noPass ? "caption caption-warn" : "caption"}>
           {noPass
@@ -455,22 +472,30 @@ function Archive({
 
       <aside className="panel">
         {status && <BackfillCard progress={status} onRetry={onUpdate} update />}
+        {labels && <LabelsCard labelling={labelling} month={b.key} onShow={(k) => move("B", k)} />}
         <StatsCard area={area} onUpdate={status ? undefined : onUpdate} updating={updating} />
-        <ChangesCard
-          areaId={area.id}
-          events={events}
-          shown={shown}
-          onShow={setShown}
-          selected={selected}
-          onSelect={selectChange}
-          onRetry={reloadEvents}
-          onNotReal={notReal}
-        />
-        <AlertsCard
-          areaId={area.id}
-          years={archiveYears(area.first_month, area.last_month)}
-          onSaved={reloadEvents}
-        />
+        {!labels && (
+          <ChangesCard
+            areaId={area.id}
+            events={events}
+            shown={shown}
+            onShow={setShown}
+            selected={selected}
+            onSelect={selectChange}
+            onRetry={reloadEvents}
+            onNotReal={notReal}
+          />
+        )}
+        {!labels && (
+          <AlertsCard
+            areaId={area.id}
+            years={archiveYears(area.first_month, area.last_month)}
+            onSaved={reloadEvents}
+          />
+        )}
+        {admin && !labels && (
+          <LabelsCard labelling={labelling} month={b.key} onShow={(k) => move("B", k)} />
+        )}
         <MonthCard
           month={b}
           passes={passes}

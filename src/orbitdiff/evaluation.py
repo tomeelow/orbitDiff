@@ -12,6 +12,7 @@ alert), overall, per category and per hard case.
 
 import hashlib
 import json
+import re
 import statistics
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -41,6 +42,8 @@ from orbitdiff.detection import (
 from orbitdiff.fetch import fetch_aoi
 
 EVAL_DIR = Path(__file__).resolve().parents[2] / "eval"
+LABEL_CATEGORIES = tuple(c for c in CATEGORIES if c != "other")  # what a labelled change is
+MONTH = re.compile(r"\d{4}-(0[1-9]|1[0-2])")
 
 
 @dataclass(frozen=True)
@@ -70,29 +73,53 @@ class EvalAoi:
         return max(0, month_gap(self.first, self.last) + 1 - YEAR)
 
 
-def load_aoi(path: Path) -> EvalAoi:
-    features = json.loads(path.read_text())["features"]
+def parse_aoi(name: str, collection: dict) -> EvalAoi:
+    """One evaluation file's contents, checked (eval/README.md). The CLI and the app's
+    labelling both go through here, so a file one accepts the other scores."""
+    features = collection["features"]
     aois = [f for f in features if f["properties"]["role"] == "aoi"]
     if len(aois) != 1:
-        raise ValueError(f"{path.name}: needs exactly one feature with role 'aoi'")
+        raise ValueError(f"{name}: needs exactly one feature with role 'aoi'")
     p = aois[0]["properties"]
+    first, last = p["first_month"], p["last_month"]
+    for month in (first, last):
+        if not MONTH.fullmatch(month):
+            raise ValueError(f"{name}: {month!r} is not a month like 2021-05")
+    if month_gap(first, last) < 0:
+        raise ValueError(f"{name}: the period ends ({last}) before it starts ({first})")
     labels = []
-    for f in features:
-        if f["properties"]["role"] != "event":
-            continue
-        category = f["properties"]["category"]
-        if category not in CATEGORIES:
-            raise ValueError(f"{path.name}: unknown category {category!r}")
-        labels.append(Label(category, f["properties"]["month"], shape(f["geometry"])))
+    for i, f in enumerate((f for f in features if f["properties"]["role"] == "event"), 1):
+        category, month = f["properties"]["category"], f["properties"]["month"]
+        if category not in LABEL_CATEGORIES:
+            raise ValueError(f"{name}: change {i} has unknown category {category!r}")
+        if not MONTH.fullmatch(month) or month_gap(month, last) < 0:
+            raise ValueError(f"{name}: change {i}'s month {month!r} is not in {first} to {last}")
+        # Every label counts towards recall, so one no method can find would count as missed.
+        if month_gap(first, month) < YEAR:
+            raise ValueError(
+                f"{name}: change {i} ({month}) is in the period's first year, which has no "
+                f"anniversary to compare with; start the period a year earlier or leave it out"
+            )
+        labels.append(Label(category, month, shape(f["geometry"])))
     return EvalAoi(
-        name=path.stem,
+        name=name,
         geometry=shape(aois[0]["geometry"]),
-        first=p["first_month"],
-        last=p["last_month"],
+        first=first,
+        last=last,
         hard_cases=tuple(p.get("hard_cases", [])),
         verified=bool(p.get("verified_by")),
         labels=tuple(labels),
     )
+
+
+def load_aoi(path: Path) -> EvalAoi:
+    return parse_aoi(path.stem, json.loads(path.read_text()))
+
+
+def dump_aoi(collection: dict) -> str:
+    """An evaluation file's text: one feature per line, so editing a label is a one-line diff."""
+    features = ",\n".join(json.dumps(f, ensure_ascii=False) for f in collection["features"])
+    return '{"type": "FeatureCollection", "features": [\n' + features + "\n]}\n"
 
 
 def load_eval_set(folder: Path = EVAL_DIR) -> tuple[list[EvalAoi], str]:

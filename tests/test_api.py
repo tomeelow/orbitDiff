@@ -688,3 +688,51 @@ def test_the_admin_view_measures_precision_and_health_for_admins_only(
     with db.session() as s:
         (flagged,) = monitoring.summary(s, strict, datetime.now(UTC)).precision
     assert flagged.flagged
+
+
+def test_labels_are_saved_to_eval_for_admins_only(client, aoi_polygon, monkeypatch, tmp_path):
+    from orbitdiff import evaluation
+
+    folder = tmp_path / "eval"
+    folder.mkdir()
+    monkeypatch.setattr(evaluation, "EVAL_DIR", folder)
+    aoi_id = create(client, aoi_polygon).json()["id"]
+    assert client.get(f"/aois/{aoi_id}/labels").status_code == 403
+    monkeypatch.setattr(settings(), "admin_emails", ["owner@example.com"])
+
+    fresh = client.get(f"/aois/{aoi_id}/labels").json()
+    assert fresh["name"] == "kyiv-west" and fresh["saved"] is False and fresh["changes"] == []
+    minx, miny, maxx, maxy = aoi_polygon.bounds
+    half_out = box(maxx - 0.005, miny, maxx + 0.005, maxy)  # the change is clipped to the area
+    body = {
+        "first_month": "2017-01",
+        "last_month": "2024-12",
+        "hard_cases": ["cropland"],
+        "changes": [
+            {"category": "buildings_roads", "month": "2019-06", "geometry": mapping(half_out)}
+        ],
+    }
+    saved = client.put(f"/aois/{aoi_id}/labels", json=body).json()
+    assert saved["saved"] is True and saved["changes"][0]["month"] == "2019-06"
+    (site,) = evaluation.load_eval_set(folder)[0]
+    assert site.name == "kyiv-west" and site.hard_cases == ("cropland",) and not site.verified
+    assert site.labels[0].footprint.within(aoi_polygon.buffer(1e-6))
+    assert client.get(f"/aois/{aoi_id}/labels").json() == saved
+
+    def refused(change: dict | None = None, **fields) -> str:
+        changes = [body["changes"][0] | (change or {})]
+        r = client.put(f"/aois/{aoi_id}/labels", json=body | {"changes": changes} | fields)
+        assert r.status_code == 422
+        return str(r.json()["detail"])
+
+    assert "first year" in refused({"month": "2017-06"})
+    assert "outside the area" in refused({"geometry": mapping(box(0, 0, 0.01, 0.01))})
+    assert "go together" in refused(verified_by="me")
+    assert "2019-06" in (folder / "kyiv-west.geojson").read_text()  # left as it was
+
+    other = client.post(
+        "/aois", json={"name": "Kyiv west", "geometry": mapping(box(30.6, 50.3, 30.62, 50.31))}
+    ).json()
+    assert client.get(f"/aois/{other['id']}/labels").status_code == 409  # never overwritten
+    monkeypatch.setattr(evaluation, "EVAL_DIR", tmp_path / "missing")
+    assert client.put(f"/aois/{aoi_id}/labels", json=body).status_code == 503

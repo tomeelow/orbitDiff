@@ -197,7 +197,7 @@ cd web && pnpm check && pnpm test   # Biome, Vitest
 ```
 
 Detection methods are scored on the evaluation set in `eval/`, which needs labelled,
-verified areas (see `eval/README.md`):
+verified areas. Admins label them in the app (see `eval/README.md`):
 
 ```bash
 uv run orbitdiff evaluate --method naive --fetch

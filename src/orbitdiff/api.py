@@ -8,8 +8,12 @@ development machine.
 
 import base64
 import html
+import json
+import re
+import unicodedata
 from collections.abc import Callable, Iterator
 from datetime import UTC, date, datetime
+from pathlib import Path
 from typing import Annotated, Literal
 
 import numpy as np
@@ -20,12 +24,25 @@ from geoalchemy2.shape import from_shape, to_shape
 from loguru import logger
 from pydantic import BaseModel, Field
 from redis import Redis
+from shapely import set_precision
 from shapely.geometry import mapping, shape
 from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from orbitdiff import accounts, alerts, cube, db, jobs, mail, monitoring, notify, render, tiles
+from orbitdiff import (
+    accounts,
+    alerts,
+    cube,
+    db,
+    evaluation,
+    jobs,
+    mail,
+    monitoring,
+    notify,
+    render,
+    tiles,
+)
 from orbitdiff.aoi import make_grid, reproject
 from orbitdiff.config import pipeline_config, settings
 from orbitdiff.detection import CATEGORIES
@@ -700,6 +717,156 @@ def admin_summary(s: SessionDep, user: UserDep) -> monitoring.Summary:
     if not _is_admin(user):
         raise HTTPException(403, "admins only")
     return monitoring.summary(s, pipeline_config(), datetime.now(UTC))
+
+
+LabelMonth = Annotated[str, Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")]
+
+
+class LabelChange(BaseModel):
+    category: Literal["buildings_roads", "vegetation_loss", "solar_industry", "water"]
+    month: LabelMonth  # the first month it's visible from orbit
+    geometry: dict  # GeoJSON Polygon or MultiPolygon, EPSG:4326
+
+
+class LabelSet(BaseModel):
+    """An evaluation file's contents, as eval/README.md describes them."""
+
+    first_month: LabelMonth
+    last_month: LabelMonth
+    hard_cases: list[Annotated[str, Field(pattern=r"^[a-z][a-z_]*$")]] = []
+    verified_by: str | None = None
+    verified_on: date | None = None
+    verified_with: str | None = None  # the high-resolution imagery every label was checked on
+    changes: list[LabelChange] = []
+
+
+class Labels(LabelSet):
+    name: str  # saved as eval/<name>.geojson
+    saved: bool
+
+
+def _admin(user: db.User) -> None:
+    if not _is_admin(user):
+        raise HTTPException(403, "admins only")
+
+
+def _label_file(aoi: db.Aoi) -> tuple[str, Path]:
+    """eval/<slug of the area's name>.geojson: "Grünheide (east)" -> grunheide-east."""
+    plain = unicodedata.normalize("NFKD", aoi.name).encode("ascii", "ignore").decode()
+    name = re.sub(r"[^a-z0-9]+", "-", plain.lower()).strip("-")[:60].strip("-")
+    name = name or f"area-{aoi.id}"
+    return name, evaluation.EVAL_DIR / f"{name}.geojson"
+
+
+def _saved_labels(name: str, path: Path, aoi: db.Aoi) -> Labels:
+    collection = json.loads(path.read_text())
+    try:
+        evaluation.parse_aoi(name, collection)
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(409, f"eval/{path.name} doesn't load: {exc}") from exc
+    (area,) = [f for f in collection["features"] if f["properties"]["role"] == "aoi"]
+    if not shape(area["geometry"]).equals_exact(to_shape(aoi.geometry), 1e-9):
+        raise HTTPException(409, f"eval/{path.name} holds a different area with this name")
+    p = area["properties"]
+    return Labels(
+        name=name,
+        saved=True,
+        first_month=p["first_month"],
+        last_month=p["last_month"],
+        hard_cases=p.get("hard_cases", []),
+        verified_by=p.get("verified_by"),
+        verified_on=p.get("verified_on"),
+        verified_with=p.get("verified_with"),
+        changes=[
+            LabelChange(
+                category=f["properties"]["category"],
+                month=f["properties"]["month"],
+                geometry=f["geometry"],
+            )
+            for f in collection["features"]
+            if f["properties"]["role"] == "event"
+        ],
+    )
+
+
+@app.get("/aois/{aoi_id}/labels")
+def get_labels(aoi_id: int, s: SessionDep, user: UserDep) -> Labels:
+    """The area's evaluation labels (admins, for building eval/). Unsaved, they start empty
+    over the area's archive."""
+    _admin(user)
+    aoi = _aoi(s, aoi_id, user)
+    name, path = _label_file(aoi)
+    if path.exists():
+        return _saved_labels(name, path, aoi)
+    first, last = s.execute(
+        select(func.min(db.Month.month), func.max(db.Month.month)).where(db.Month.aoi_id == aoi_id)
+    ).one()
+    first = first or aoi.archive_start
+    return Labels(
+        name=name,
+        saved=False,
+        first_month=first.strftime("%Y-%m"),
+        last_month=(last or first).strftime("%Y-%m"),
+    )
+
+
+@app.put("/aois/{aoi_id}/labels")
+def put_labels(aoi_id: int, body: LabelSet, s: SessionDep, user: UserDep) -> Labels:
+    """Save the area's labels to eval/<name>.geojson, checked as `orbitdiff evaluate` reads
+    them. Only where eval/ exists: a checkout of the repository, where they get committed."""
+    _admin(user)
+    aoi = _aoi(s, aoi_id, user)
+    name, path = _label_file(aoi)
+    if not path.parent.is_dir():
+        raise HTTPException(503, "no eval/ folder here: labels are saved in a repository checkout")
+    if path.exists():
+        _saved_labels(name, path, aoi)  # never overwrite another area's file
+    verified = {
+        "verified_by": (body.verified_by or "").strip() or None,
+        "verified_on": body.verified_on.isoformat() if body.verified_on else None,
+        "verified_with": (body.verified_with or "").strip() or None,
+    }
+    if any(verified.values()) and not all(verified.values()):
+        raise HTTPException(422, "who verified, when, and against what imagery go together")
+    area = to_shape(aoi.geometry)
+    features = [
+        {
+            "type": "Feature",
+            "properties": {
+                "role": "aoi",
+                "first_month": body.first_month,
+                "last_month": body.last_month,
+                "hard_cases": body.hard_cases,
+                **{k: v for k, v in verified.items() if v},
+            },
+            "geometry": mapping(area),
+        }
+    ]
+    for i, change in enumerate(body.changes, 1):
+        try:
+            footprint = shape(change.geometry)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise HTTPException(422, f"change {i}: not GeoJSON") from exc
+        if footprint.geom_type not in ("Polygon", "MultiPolygon") or not footprint.is_valid:
+            raise HTTPException(422, f"change {i}: not a valid polygon")
+        footprint = set_precision(footprint.intersection(area), 1e-6)  # about 0.1 m
+        if footprint.is_empty:
+            raise HTTPException(422, f"change {i} is outside the area")
+        features.append(
+            {
+                "type": "Feature",
+                "properties": {"role": "event", "category": change.category, "month": change.month},
+                "geometry": mapping(footprint),
+            }
+        )
+    collection = {"type": "FeatureCollection", "features": features}
+    try:
+        evaluation.parse_aoi(name, collection)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc).removeprefix(f"{name}: ")) from exc
+    path.write_text(evaluation.dump_aoi(collection))
+    logger.info(f"labels: AOI {aoi_id} -> eval/{path.name}, {len(body.changes)} changes")
+    return _saved_labels(name, path, aoi)
 
 
 @app.post("/auth/logout", status_code=204)
