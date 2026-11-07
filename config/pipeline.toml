@@ -51,9 +51,18 @@ confirm_on_next_clear = true
 # in the reference, and agrees when the change shows in this much of that part.
 footprint_clear_frac = 0.5
 agree_frac = 0.5
+# Snow (SCL 11, kept and flagged) on this much of an event's observed footprint, in either
+# month compared, makes the event seasonal: snow on one side looks like change. PROVISIONAL.
+snow_frac = 0.5
 # Detector thresholds. PROVISIONAL: starting values from the implementation plan, not yet
 # tuned on a verified evaluation set (eval/README.md).
 ndvi_drop = 0.3                   # naive baseline: NDVI fall against the same month a year earlier
+cva_magnitude = 0.1               # CVA: length of the four-band reflectance difference, same month a year earlier
+seasonal_history_years = 3        # seasonal model (BFAST-style): years of each pixel's NDVI history fitted
+seasonal_harmonics = 1            # annual harmonics in that fit, on top of a linear trend
+seasonal_min_months = 18          # observed months a pixel needs in its history to be fitted
+seasonal_sigmas = 3.0             # a break: NDVI this many residual standard deviations below the fit
+seasonal_min_sigma = 0.05         # ...counting the deviation as at least this, so a drop is >= 0.15 NDVI
 
 [detection.categories]            # starting heuristics (implementation plan, Phase 7), on medians over the footprint
 water_ndwi = 0.0                  # NDWI after above this, and not before: water
@@ -62,6 +71,9 @@ vegetation_ndvi = 0.6             # NDVI before at least this: forest or shrub
 bare_ndvi = 0.35                  # ...and after below this: vegetation loss
 dark_visible = 0.05               # mean visible reflectance after below this,
 dark_nir = 0.15                   # and NIR below this: solar or industry
+
+[alerts]
+default_min_ha = 0.5              # the "smallest change" a new alert rule starts with (mockup)
 
 [evaluation]                      # matching detections to labelled events (eval/)
 min_overlap = 0.25                # intersection, as a share of the smaller footprint

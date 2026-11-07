@@ -6,19 +6,21 @@ Progress lives on the AOI's row, so it outlives the job.
 """
 
 import math
-from datetime import UTC, datetime
+import time
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import numpy as np
-from geoalchemy2.shape import to_shape
+from geoalchemy2.shape import from_shape, to_shape
 from loguru import logger
 from redis import Redis
 from rq import Queue
-from sqlalchemy import update
+from shapely.geometry.base import BaseGeometry
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 
-from orbitdiff import composites, cube, db, masking, render
-from orbitdiff.aoi import AOIGrid, make_grid
+from orbitdiff import composites, cube, db, detection, masking, render
+from orbitdiff.aoi import AOIGrid, make_grid, reproject
 from orbitdiff.config import PipelineConfig, pipeline_config, settings
 from orbitdiff.fetch import fetch_aoi
 
@@ -68,6 +70,8 @@ def backfill(aoi_id: int, model: masking.CloudModel | None = None) -> None:
         _set(aoi_id, stage="compositing")
         composites.update_composites(grid.aoi_id, cfg, data_dir)
         sync_records(aoi_id, cfg, data_dir)
+        _set(aoi_id, stage="detecting")
+        sync_events(aoi_id, cfg, data_dir)
         _set(aoi_id, stage="ready")
     except Exception as exc:
         _set(aoi_id, stage="failed", error=f"{type(exc).__name__}: {exc}")
@@ -161,3 +165,104 @@ def sync_records(aoi_id: int, cfg: PipelineConfig, data_dir: Path) -> None:
                     )
                 )
     logger.info("AOI {}: {} scenes and {} months recorded", aoi_id, len(scenes), len(months))
+
+
+def _utc(t: np.datetime64) -> datetime:
+    return t.astype("datetime64[us]").item().replace(tzinfo=UTC)
+
+
+def _month(month: str) -> date:
+    return datetime.strptime(month, "%Y-%m").date()
+
+
+def _match(
+    found: list[detection.Event], geometries: list[BaseGeometry], stored: list[db.Event]
+) -> dict[int, db.Event]:
+    """Each found event's stored row: from the same month, overlapping it most, best pairs
+    first, so an event finds its own earlier self rather than a neighbour or a stale row."""
+    by_month: dict[date, list[tuple[db.Event, BaseGeometry]]] = {}
+    for r in stored:
+        by_month.setdefault(r.month, []).append((r, to_shape(r.geometry)))
+    pairs = []
+    for i, (e, geometry) in enumerate(zip(found, geometries, strict=True)):
+        for r, shape in by_month.get(_month(e.month), []):
+            overlap = geometry.intersection(shape).area  # degrees², only compared here
+            if overlap > 0:  # touching at an edge is not the same change
+                pairs.append((overlap / geometry.union(shape).area, i, r))
+    rows: dict[int, db.Event] = {}
+    taken: set[int] = set()
+    for _, i, r in sorted(pairs, key=lambda p: p[0], reverse=True):
+        if i not in rows and r.id not in taken:
+            rows[i] = r
+            taken.add(r.id)
+    return rows
+
+
+def sync_events(aoi_id: int, cfg: PipelineConfig, data_dir: Path) -> None:
+    """Run the production method over the AOI's whole archive and reconcile its events with
+    the stored ones. Detection is a replay, so the backfill and a single new pass go through
+    the same code. A recomputed event keeps its row (and so its alerts) when it overlaps the
+    stored one from the same month; a stored event no longer found is dismissed, never
+    deleted."""
+    t0 = time.perf_counter()
+    key = str(aoi_id)
+    with db.session() as s:
+        grid = grid_for(s.get(db.Aoi, aoi_id))
+    method = detection.methods(cfg.detection)[detection.PRODUCTION]
+    found = detection.detect(
+        detection.load_stack(data_dir, key),
+        detection.Passes(data_dir, key, cfg.masking),
+        grid,
+        method,
+        cfg.detection,
+    )
+    version = detection.version(method, cfg.detection)
+    now = datetime.now(UTC)
+    geometries = [reproject(e.footprint, grid.epsg, 4326) for e in found]
+    with db.session() as s:
+        stored = list(
+            s.scalars(select(db.Event).where(db.Event.aoi_id == aoi_id).order_by(db.Event.id))
+        )
+        rows = _match(found, geometries, stored)
+        unmatched = {e.id for e in stored} - {r.id for r in rows.values()}
+        for i, (e, geometry) in enumerate(zip(found, geometries, strict=True)):
+            values = {
+                "aoi_id": aoi_id,
+                "month": _month(e.month),
+                "reference_month": _month(e.reference_month),
+                "category": e.category,
+                "status": e.status,
+                "area_ha": e.area_ha,
+                "geometry": from_shape(geometry, srid=4326),
+                "ndvi_before": None if np.isnan(e.ndvi_before) else e.ndvi_before,
+                "ndvi_after": None if np.isnan(e.ndvi_after) else e.ndvi_after,
+                "detected_utc": _utc(e.detected),
+                "status_utc": _utc(e.history[-1][2]),
+                "history": [
+                    {"status": st, "cause": cause, "at": _utc(at).isoformat()}
+                    for st, cause, at in e.history
+                ],
+                "items": e.items,
+                "method_version": version,
+                "thresholds": cfg.detection.model_dump(),
+            }
+            row = rows.get(i)
+            if row is None:
+                s.add(db.Event(**values))
+            else:
+                for name, value in values.items():
+                    setattr(row, name, value)
+        for row in (r for r in stored if r.id in unmatched and r.status != "dismissed"):
+            row.status, row.status_utc = "dismissed", now
+            row.history = [
+                *row.history,
+                {"status": "dismissed", "cause": "no longer detected", "at": now.isoformat()},
+            ]
+    logger.info(
+        "AOI {}: {} events ({}), {} no longer detected, in {:.1f}s",
+        aoi_id,
+        len(found),
+        version,
+        len(unmatched),
+        time.perf_counter() - t0,
+    )

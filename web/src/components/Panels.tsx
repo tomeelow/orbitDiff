@@ -172,6 +172,7 @@ const STAGE_TEXT: Record<Progress["stage"], string> = {
   reading: "Reading passes over the area",
   masking: "Masking clouds and shadows",
   compositing: "Building monthly composites",
+  detecting: "Finding changes",
   ready: "Ready",
   failed: "Backfill failed",
 };
@@ -179,20 +180,30 @@ const STAGE_TEXT: Record<Progress["stage"], string> = {
 export function BackfillCard({
   progress,
   onRetry,
+  update = false,
 }: {
   progress: Progress | null;
   onRetry: () => void;
+  update?: boolean; // the archive exists; this brings it up to date
 }) {
   const stage = progress?.stage ?? "queued";
   const fraction = progress && progress.total > 0 ? progress.done / progress.total : null;
   return (
     <section className="card" aria-labelledby="backfill-title" aria-live="polite">
-      <h2 id="backfill-title">{stage === "failed" ? "Backfill failed" : "Building the archive"}</h2>
+      <h2 id="backfill-title">
+        {stage === "failed"
+          ? update
+            ? "Update failed"
+            : "Backfill failed"
+          : update
+            ? "Updating the archive"
+            : "Building the archive"}
+      </h2>
       {stage === "failed" ? (
         <div className="state-inline">
           <p className="error-text">{progress?.error ?? "The backfill stopped."}</p>
           <button type="button" className="btn" onClick={onRetry}>
-            Retry backfill
+            {update ? "Retry update" : "Retry backfill"}
           </button>
         </div>
       ) : (
@@ -216,7 +227,9 @@ export function BackfillCard({
             </p>
           )}
           <p className="muted small">
-            Only the area's window of each pass is read. The page updates when the archive is ready.
+            {update
+              ? "The archive below stays as it was until the update finishes."
+              : "Only the area's window of each pass is read. The page updates when the archive is ready."}
           </p>
         </>
       )}

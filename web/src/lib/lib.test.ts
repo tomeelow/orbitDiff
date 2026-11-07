@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { alertText, historyLine } from "./changes";
 import { formatArea, formatBytes, formatLonLat, formatUtc } from "./format";
 import { boundsOf, type Polygon, polygonAreaKm2 } from "./geo";
 import { compareNote, defaultPair, type MonthFacts, monthLabel, shiftMonth } from "./months";
@@ -119,5 +120,33 @@ describe("tiles", () => {
   it("intersects bounds", () => {
     expect(intersect([0, 0, 2, 2], [1, 1, 3, 3])).toEqual([1, 1, 2, 2]);
     expect(intersect([0, 0, 1, 1], [2, 2, 3, 3])).toBeNull();
+  });
+});
+
+describe("changes", () => {
+  it("words the API's alert verdict without deciding it", () => {
+    expect(alertText({ alerts: true, alert_reason: "alert" })).toBe("Would alert");
+    expect(alertText({ alerts: false, alert_reason: "under 0.5 ha" })).toBe("Under 0.5 ha");
+    expect(alertText({ alerts: false, alert_reason: "category off" })).toBe("Category not watched");
+    expect(alertText({ alerts: false, alert_reason: "seasonal" })).toBe("No alert");
+  });
+
+  it("tells a status history by pass and by month", () => {
+    const pass = "S2A_33UVU_20200401_1_L2A";
+    expect(historyLine({ status: "pending", cause: pass, at: "2020-04-01T10:26:01Z" }, true)).toBe(
+      `Seen 1 Apr 2020 on ${pass}`,
+    );
+    expect(
+      historyLine({ status: "confirmed", cause: pass, at: "2020-04-08T10:26:01Z" }, false),
+    ).toBe(`Confirmed 8 Apr 2020 by ${pass}`);
+    expect(
+      historyLine({ status: "seasonal", cause: "snow in 2021-01", at: "2021-01-26T10:26Z" }, true),
+    ).toBe("Seasonal: snow in Jan 2021");
+    expect(
+      historyLine(
+        { status: "dismissed", cause: "no longer detected", at: "2026-11-07T18:00Z" },
+        false,
+      ),
+    ).toBe("Dismissed: no longer detected");
   });
 });

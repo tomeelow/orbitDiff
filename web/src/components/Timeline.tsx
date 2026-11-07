@@ -12,6 +12,7 @@ interface Props {
   months: TimelineMonth[];
   a: string | null;
   b: string;
+  marks?: Map<string, string>; // months with a change on show, and its colour
   onPick: (key: string) => void;
 }
 
@@ -19,7 +20,7 @@ const DOT_PAD = 0.12; // keep NDVI dots off the row's edges
 
 /** Months as columns: all passes as an outline, clear passes filled green, gaps hatched,
 mean NDVI as a line underneath. Clicking a month moves the active cursor. */
-export function Timeline({ months, a, b, onPick }: Props) {
+export function Timeline({ months, a, b, marks, onPick }: Props) {
   const scroller = useRef<HTMLDivElement>(null);
   const [tip, setTip] = useState<{ month: TimelineMonth; x: number; y: number } | null>(null);
   const maxPasses = Math.max(1, ...months.map((m) => m.passes));
@@ -83,6 +84,7 @@ export function Timeline({ months, a, b, onPick }: Props) {
           const isA = m.key === a;
           const isB = m.key === b;
           const showYear = i === 0 || m.key.endsWith("-01");
+          const mark = marks?.get(m.key);
           return (
             <button
               key={m.key}
@@ -92,7 +94,7 @@ export function Timeline({ months, a, b, onPick }: Props) {
               data-selected={isA || isB || undefined}
               aria-label={`${monthLabel(m.key)}: ${m.clear_scenes} clear of ${m.passes} passes${
                 m.ndvi === null ? ", no clear pixels" : `, mean NDVI ${m.ndvi.toFixed(2)}`
-              }${isA ? ", cursor A" : ""}${isB ? ", cursor B" : ""}`}
+              }${mark ? ", a change" : ""}${isA ? ", cursor A" : ""}${isB ? ", cursor B" : ""}`}
               onClick={() => onPick(m.key)}
               onMouseEnter={(e) => showTip(m, e.currentTarget)}
               onFocus={(e) => showTip(m, e.currentTarget)}
@@ -114,6 +116,7 @@ export function Timeline({ months, a, b, onPick }: Props) {
                 {m.ndvi !== null && <i style={{ bottom: `${y(m.ndvi) * 100}%` }} />}
               </span>
               <span className="col-tick">
+                <i className="col-mark" style={mark ? { background: mark } : undefined} />
                 {wide && monthName(m.key)}
                 {showYear && <small>{yearOf(m.key)}</small>}
               </span>

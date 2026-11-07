@@ -1,6 +1,8 @@
 /** MapLibre setup shared by the draw and archive screens. */
 
 import {
+  type ExpressionSpecification,
+  type GeoJSONSource,
   type ImageSource,
   Map as MapLibreMap,
   type MapOptions,
@@ -9,7 +11,9 @@ import {
   setWorkerUrl,
 } from "maplibre-gl";
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
+import type { ChangeEvent } from "./api";
 import type { Theme } from "./hooks";
+import { CATEGORY } from "./lib/changes";
 import type { Bounds, Polygon } from "./lib/geo";
 
 // MapLibre finds its worker next to its own module, which bundling moves; say where it is.
@@ -146,4 +150,75 @@ export function setPassImage(
     },
     "od-aoi-casing",
   );
+}
+
+/** Change footprints in their category's colour: pending dashed, dismissed and seasonal
+dimmed, the selected one filled. The fill layer is also the click target. */
+export function setChanges(map: MapLibreMap, events: ChangeEvent[], selected: number | null): void {
+  const data: GeoJSON.FeatureCollection = {
+    type: "FeatureCollection",
+    features: events.map((e) => ({
+      type: "Feature",
+      id: e.id,
+      geometry: e.geometry,
+      properties: {
+        id: e.id,
+        color: CATEGORY[e.category].color,
+        pending: e.status === "pending",
+        dim: e.status === "dismissed" || e.status === "seasonal",
+        selected: e.id === selected,
+      },
+    })),
+  };
+  const source = map.getSource<GeoJSONSource>("od-changes");
+  if (source) {
+    source.setData(data);
+    return;
+  }
+  map.addSource("od-changes", { type: "geojson", data });
+  const width = (base: number): ExpressionSpecification => [
+    "case",
+    ["get", "selected"],
+    base + 1.5,
+    base,
+  ];
+  const opacity: ExpressionSpecification = ["case", ["get", "dim"], 0.5, 1];
+  map.addLayer(
+    {
+      id: "od-changes-fill",
+      type: "fill",
+      source: "od-changes",
+      paint: {
+        "fill-color": ["get", "color"],
+        "fill-opacity": ["case", ["get", "selected"], 0.28, 0],
+      },
+    },
+    "od-aoi-casing",
+  );
+  map.addLayer(
+    {
+      id: "od-changes-casing",
+      type: "line",
+      source: "od-changes",
+      paint: { "line-color": MAP_COLORS.shade, "line-width": width(3), "line-opacity": 0.55 },
+    },
+    "od-aoi-casing",
+  );
+  for (const pending of [false, true]) {
+    map.addLayer(
+      {
+        id: pending ? "od-changes-dash" : "od-changes-line",
+        type: "line",
+        source: "od-changes",
+        filter: ["==", ["get", "pending"], pending],
+        paint: {
+          "line-color": ["get", "color"],
+          "line-width": width(1.5),
+          "line-opacity": opacity,
+          ...(pending ? { "line-dasharray": [2, 1.5] } : {}),
+        },
+      },
+      "od-aoi-casing",
+    );
+  }
 }

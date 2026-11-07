@@ -4,13 +4,21 @@ One definition of each, shared by the API's scene images, the mask report and th
 colormap TiTiler loads for composite tiles, so every view of an AOI looks the same.
 """
 
+import math
 import warnings
 
 import numpy as np
 from rasterio.errors import NotGeoreferencedWarning
 from rasterio.io import MemoryFile
+from shapely.geometry.base import BaseGeometry
+
+from orbitdiff.aoi import AOIGrid
+from orbitdiff.config import BANDS
 
 TRUE_COLOR_MAX = 0.3  # reflectance shown as white
+CROP_CONTEXT = 0.5  # around an event, this share of its size again on each side
+CROP_MIN_PX = 24  # an event crop covers at least this many 10 m pixels a side
+CROP_PX = 192  # crops are scaled up to about this size, nearest neighbour
 # NDVI ramp from the mockup: (value, (r, g, b)), linear between stops, clamped outside.
 NDVI_RAMP = (
     (-0.3, (40, 70, 120)),
@@ -61,3 +69,20 @@ def png(image: np.ndarray) -> bytes:
             with mem.open(**profile) as dst:
                 dst.write(image.transpose(2, 0, 1))
             return mem.read()
+
+
+def crop(values: np.ndarray, grid: AOIGrid, area: BaseGeometry) -> np.ndarray:
+    """True colour (y, x, RGBA) around `area` (in the grid's CRS) from (band, y, x)
+    reflectance, unobserved pixels transparent, 10 m pixels kept square and sharp."""
+    left, bottom, right, top = area.bounds
+    col0, row0 = ~grid.transform @ (left, top)
+    col1, row1 = ~grid.transform @ (right, bottom)
+    half = max(col1 - col0, row1 - row0, CROP_MIN_PX / (1 + 2 * CROP_CONTEXT))
+    half *= 0.5 + CROP_CONTEXT
+    row, col = (row0 + row1) / 2, (col0 + col1) / 2
+    rows = slice(max(0, math.floor(row - half)), min(grid.height, math.ceil(row + half)))
+    cols = slice(max(0, math.floor(col - half)), min(grid.width, math.ceil(col + half)))
+    red, green, blue = (values[BANDS.index(b), rows, cols] for b in ("red", "green", "blue"))
+    image = with_alpha(true_color(red, green, blue), ~np.isnan(red))
+    scale = max(1, CROP_PX // max(image.shape[:2]))
+    return image.repeat(scale, axis=0).repeat(scale, axis=1)

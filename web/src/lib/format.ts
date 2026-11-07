@@ -29,6 +29,12 @@ export function formatUtc(iso: string): string {
   return `${t.getUTCDate()} ${MONTHS[t.getUTCMonth()]} ${hh}:${mm}`;
 }
 
+/** "2020-04-08T10:26:01Z" -> "8 Apr 2020", the UTC date. */
+export function formatUtcDate(iso: string): string {
+  const t = new Date(iso);
+  return `${t.getUTCDate()} ${MONTHS[t.getUTCMonth()]} ${t.getUTCFullYear()}`;
+}
+
 export function formatLonLat(lon: number, lat: number): string {
   return `${Math.abs(lat).toFixed(5)}° ${lat >= 0 ? "N" : "S"}, ${Math.abs(lon).toFixed(5)}° ${lon >= 0 ? "E" : "W"}`;
 }

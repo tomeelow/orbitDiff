@@ -136,6 +136,12 @@ def read_composite(path: Path) -> np.ndarray:
     return np.where(dn == 0, np.nan, dn / SCALE).astype(np.float32)
 
 
+def read_snow(path: Path) -> np.ndarray:
+    """Where a detection COG's month had snow in at least one clear observation."""
+    with rasterio.open(path) as src:
+        return src.read(DETECTION_BANDS.index("n_snow") + 1) > 0
+
+
 def _json_default(o: object) -> object:
     return sorted(o) if isinstance(o, set | frozenset) else str(o)
 

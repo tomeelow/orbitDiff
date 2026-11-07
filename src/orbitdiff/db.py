@@ -1,4 +1,5 @@
-"""Postgres + PostGIS records (ADR-006): AOIs, the passes over them, and their months.
+"""Postgres + PostGIS records (ADR-006): AOIs, the passes over them, their months, and the
+changes found in them.
 
 Rasters stay in the data store; these rows describe them. Geometries are stored in
 EPSG:4326 and every area is computed in the AOI's UTM zone. Accounts arrive in Phase 9,
@@ -12,6 +13,7 @@ from functools import cache
 
 from geoalchemy2 import Geometry, WKBElement
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
     DateTime,
@@ -29,7 +31,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sess
 
 from orbitdiff.config import settings
 
-STAGES = ("queued", "reading", "masking", "compositing", "ready", "failed")
+STAGES = ("queued", "reading", "masking", "compositing", "detecting", "ready", "failed")
 
 
 class Base(DeclarativeBase):
@@ -95,6 +97,37 @@ class Month(Base):
     filled_frac: Mapped[float] = mapped_column(Float)  # AOI pixels filled for display only
     ndvi_mean: Mapped[float | None] = mapped_column(Float)  # over observed pixels only
     version: Mapped[str] = mapped_column(String(16))  # changes whenever its tiles do
+
+
+class Event(Base):
+    """A change in an AOI, with everything needed to explain it to a user or debug it: the
+    months compared, the passes behind it, every status and what caused it, and the method
+    version and thresholds in force (CLAUDE.md, provenance)."""
+
+    __tablename__ = "events"
+    __table_args__ = (Index("ix_events_geometry", "geometry", postgresql_using="gist"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    aoi_id: Mapped[int] = mapped_column(ForeignKey("aois.id", ondelete="CASCADE"), index=True)
+    month: Mapped[date]  # the composite month it first showed in
+    reference_month: Mapped[date]  # the same month a year earlier
+    category: Mapped[str] = mapped_column(String(24))
+    status: Mapped[str] = mapped_column(String(16))  # pending | confirmed | dismissed | seasonal
+    area_ha: Mapped[float] = mapped_column(Float)
+    geometry: Mapped[WKBElement] = mapped_column(
+        Geometry("GEOMETRY", srid=4326, spatial_index=False)
+    )
+    ndvi_before: Mapped[float | None] = mapped_column(Float)
+    ndvi_after: Mapped[float | None] = mapped_column(Float)
+    detected_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # first seen
+    status_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # current status since
+    history: Mapped[list] = mapped_column(JSON)  # [{"status", "cause", "at"}], oldest first
+    items: Mapped[list] = mapped_column(JSON)  # STAC item ids clear over it in both months
+    method_version: Mapped[str] = mapped_column(String(48))
+    thresholds: Mapped[dict] = mapped_column(JSON)  # the detection settings in force
+    updated_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 @cache
