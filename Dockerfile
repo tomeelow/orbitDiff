@@ -1,6 +1,7 @@
 # The Python services. One image for the API, scheduler and migrations; the worker builds
-# the same file with SYNC_ARGS="--group ml" for the cloud model (PyTorch), so the API image
-# stays small. Data, secrets and model weights come in at run time, never at build time.
+# the same file with SYNC_ARGS="--group ml" for the cloud model (CPU-only PyTorch), so the
+# API image stays small. Data, secrets and model weights come in at run time, never at build
+# time.
 FROM ghcr.io/astral-sh/uv:0.11.20 AS uv
 
 FROM python:3.12.16-slim

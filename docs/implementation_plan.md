@@ -612,10 +612,11 @@ volumes: { pg: {} }
 
 > **As built, the local half (2026-11-07):**
 > - `docker compose up --build` runs db, redis, mailpit, titiler, a one-shot `migrate` (`alembic upgrade head`; the app services wait for it), api (8000), worker, scheduler and web (8080). The one step before it is the signing key in `.env`: compose refuses to start without one, and there's no default to commit.
-> - One `Dockerfile` for the Python services. The API, scheduler and migrations share an image without the `ml` group (about 1 GB, mostly GDAL and SciPy); the worker builds the same file with `--group ml`. Both run as a non-root user and get no `.env`: settings come from compose's `environment`.
+> - One `Dockerfile` for the Python services. The API, scheduler and migrations share an image without the `ml` group (about 1 GB, mostly GDAL and SciPy); the worker builds the same file with `--group ml` (about 2.4 GB). Both run as a non-root user and get no `.env`: settings come from compose's `environment`.
 > - The app services mount `./data` and use the same database as development, so the stack and `uv run` see the same areas, and TiTiler keeps reading `./data/composites`.
 > - The web image builds with pnpm and serves `dist/` from nginx, with `.mjs` served as JavaScript (MapLibre's worker).
-> - CI checks the compose file and builds the API and web images on every PR. The worker image isn't built there: the locked PyTorch wheels from PyPI carry CUDA libraries and Triton on Linux, about 4 GB that a CPU-only worker doesn't use.
+> - On Linux, torch and torchvision come from PyTorch's CPU-only index (`[tool.uv.sources]`). The PyPI wheels carry CUDA libraries and Triton, which made the worker image 10.8 GB on a machine with no GPU. Same versions otherwise: OmniCloudMask gives identical classes with either build (6 real passes, every pixel).
+> - CI checks the compose file and builds the API, worker and web images on every PR, and checks that the worker imports the cloud model on a CPU-only PyTorch.
 > - Not yet (needs accounts and credentials): hosting, object storage, a real email provider, TLS, backups, deploying images from CI.
 
 ---
