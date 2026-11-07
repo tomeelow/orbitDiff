@@ -1,0 +1,33 @@
+repos:
+  # ruff and pytest run from the project environment, so their versions come from uv.lock.
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff
+        entry: uv run ruff check --fix
+        language: system
+        types: [python]
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
+        language: system
+        types: [python]
+      - id: pytest
+        name: pytest
+        entry: uv run pytest -q
+        language: system
+        pass_filenames: false
+        types: [python]
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: [--maxkb=500]   # imagery and weights belong in object storage and MLflow
+      - id: detect-private-key
+      - id: no-commit-to-branch
+        args: [--branch, main]

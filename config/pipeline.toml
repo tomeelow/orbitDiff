@@ -1,0 +1,29 @@
+# Pipeline parameters. Versioned with the code; secrets live in the environment, never here.
+# Why these values: docs/ADR.md. Evidence behind them: docs/spikes.md.
+
+[aoi]
+max_km2 = 10                      # windowed reads and the per-AOI cube assume small areas (ADR-001)
+archive_start = 2017-01-01
+
+[catalog.primary]                 # ADR-002: one item per pass, newest processing baseline
+name = "earth-search"
+url = "https://earth-search.aws.element84.com/v1"
+collection = "sentinel-2-l2a"
+
+[catalog.fallback]                # ADR-002: COGs + anonymous token, not CDSE's JPEG 2000
+name = "planetary-computer"
+url = "https://planetarycomputer.microsoft.com/api/stac/v1"
+collection = "sentinel-2-l2a"
+
+[masking]
+scl_drop = [0, 1, 3, 8, 9, 10]    # no data, defective, cloud shadow, cloud medium/high, thin cirrus
+scl_flag = [11]                   # snow: kept, flagged
+scene_min_clear_frac = 0.6        # a pass "counts" as clear for the AOI above this
+
+[detection]
+min_mapping_unit_ha = 0.1         # floor under the user's "smallest change" slider (10 pixels)
+seasonal_revert_months = 3        # a change that reverts within this is seasonal
+confirm_on_next_clear = true
+
+[schedule]
+poll_every_hours = 3              # ADR-008

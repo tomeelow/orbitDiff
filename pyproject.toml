@@ -1,0 +1,53 @@
+[project]
+name = "orbitdiff"
+version = "0.1.0"
+description = "Watch your own areas for change in Sentinel-2 imagery, with alerts you can trust."
+authors = [
+    { name = "Ivan Tomilo", email = "153078768+tomeelow@users.noreply.github.com" }
+]
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "loguru==0.7.3",
+    "numpy==2.5.4",
+    "odc-stac==0.5.3",
+    "pydantic-settings==2.16.2",
+    "pyproj==3.8.0",
+    "pystac-client==0.9.1",
+    "rasterio==1.5.2",
+    "shapely==2.2.0",
+    "xarray==2026.9.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.20,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# ruff formats Python code blocks inside Markdown; docs/ holds the plan, leave it alone.
+extend-exclude = ["*.md", "notebooks", "mockup"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "N", "ANN"]
+ignore = [
+    "ANN001", # annotations are required on public functions, not on every local/test arg
+    "ANN002",
+    "ANN003",
+    "ANN201",
+    "ANN202",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ANN", "E501"]
+"spikes/*" = ["ANN", "E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pre-commit==4.7.0",
+    "pytest==9.2.0",
+    "ruff==0.17.4",
+]
