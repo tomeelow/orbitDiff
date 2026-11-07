@@ -187,6 +187,8 @@ Create `docs/ADR.md` with these decisions and their reasoning:
 
 **Goal:** given a polygon and a date range, produce a pixel-aligned stack of harmonized reflectance and SCL over the AOI, cached, with bytes read known.
 
+> **As built (2026-11-07):** reads go through rasterio directly rather than odc-stac (ADR-009), so the pass choice, the SCL-first gate and byte accounting stay ours. `CPL_VSIL_CURL_ALLOWED_EXTENSIONS` is left unset because Planetary Computer hrefs carry a SAS query string. The cube is local Zarr under `data/` until object storage arrives in Phase 4. Try it with `orbitdiff fetch --aoi examples/aoi_kyiv.geojson --start 2021-06-01 --end 2021-09-30`.
+
 ### Search
 ```python
 from pystac_client import Client
