@@ -63,10 +63,14 @@ class MaskingConfig(_Section):
     cloud_model: str
     cloud_model_version: float
     cloud_model_classes: frozenset[int]
+    offset_check_scl: frozenset[int]
+    offset_check_percentile: float = Field(ge=0, le=100)
+    offset_check_min_dark: float = Field(lt=0)
+    offset_check_min_pixels: int = Field(ge=1)
 
     @model_validator(mode="after")
     def _known_disjoint_classes(self) -> Self:
-        unknown = (self.scl_drop | self.scl_flag) - SCL_CLASSES
+        unknown = (self.scl_drop | self.scl_flag | self.offset_check_scl) - SCL_CLASSES
         if unknown:
             raise ValueError(f"not SCL classes: {sorted(unknown)}")
         if both := self.scl_drop & self.scl_flag:

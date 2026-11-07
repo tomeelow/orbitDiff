@@ -75,6 +75,7 @@ def write_report(aoi_id: str, cfg: MaskingConfig, data_dir: Path) -> tuple[Path,
     classes = masking.model_classes_for(full, masks)
     scl_clear = masking.clear_mask(full, None, cfg)
     combined = masking.clear_mask(full, classes, cfg)
+    suspect = masking.offset_suspect(full, cfg)
     refl = cube.reflectance(full)
 
     out = data_dir / "reports" / aoi_id / "masking"
@@ -98,7 +99,9 @@ def write_report(aoi_id: str, cfg: MaskingConfig, data_dir: Path) -> tuple[Path,
         cards.append(
             f'<figure><img src="img/{item}.png"><img src="img/{item}_masks.png">'
             f"<figcaption><b>{day}</b> {html.escape(item)}<br>clear: SCL {row['scl_clear']:.0%}"
-            f" · SCL+model {row['combined_clear']:.0%}</figcaption></figure>"
+            f" · SCL+model {row['combined_clear']:.0%}"
+            + ("<br>offset flag contradicts the pixels: left out" if suspect[t] else "")
+            + "</figcaption></figure>"
         )
 
     with (out / "passes.csv").open("w", newline="") as f:

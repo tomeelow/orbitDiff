@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from orbitdiff.radiometry import offset_dn, to_reflectance
+from orbitdiff.radiometry import dark_target, offset_dn, to_reflectance
 
 
 @pytest.mark.parametrize(
@@ -10,7 +10,9 @@ from orbitdiff.radiometry import offset_dn, to_reflectance
         # Cases checked against pixel values in docs/spikes.md, section 2.
         ("00.01", False, 0),  # Earth Search l2a, 2017 (non-ESA processor)
         ("03.01", False, 0),  # Earth Search l2a, before the offset existed
-        ("04.00", False, -1000),  # Earth Search l2a, 2022: offset still in the pixels
+        # Earth Search l2a, Feb 2022: offset still in the pixels. From March 2022 some
+        # unflagged items lack it; masking.offset_suspect catches those (spike 5).
+        ("04.00", False, -1000),
         ("05.00", True, 0),  # Earth Search l2a, reprocessed: offset already removed
         ("05.11", True, 0),  # Earth Search l2a, current
         ("05.00", False, -1000),  # Earth Search c1 (no flag): offset in the pixels
@@ -39,3 +41,13 @@ def test_same_pass_reads_the_same_after_harmonizing():
     es = to_reflectance(np.array([678], np.uint16), offset_dn("05.00", True))
     c1 = to_reflectance(np.array([1678], np.uint16), offset_dn("05.00", False))
     np.testing.assert_allclose(es, c1)
+
+
+def test_dark_target_is_a_low_percentile_of_the_darker_band_over_reference_pixels():
+    blue = np.array([[[0.02, 0.30, 0.05, 0.01, 0.9]]], np.float32)
+    red = np.array([[[0.04, 0.01, 0.05, np.nan, 0.0]]], np.float32)
+    reference = np.array([[[True, True, True, True, False]]])  # no data and non-reference out
+    assert dark_target(blue, red, reference, percentile=0, min_pixels=3).tolist() == [
+        pytest.approx(0.01)
+    ]
+    assert np.isnan(dark_target(blue, red, reference, percentile=0, min_pixels=4)).all()

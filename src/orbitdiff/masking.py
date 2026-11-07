@@ -4,7 +4,8 @@ SCL misses thin cirrus, haze and some shadows, and those slip into composites as
 OmniCloudMask, run on the red, green and NIR bands already in the cube, catches much of
 it. A pixel is clear only when its bands have data, SCL doesn't drop it, and the model
 doesn't call it cloud or shadow. Every cloud and shadow is first grown by `dilate_px`,
-because cloud edges are where masks fail. Snow is kept and flagged, never dropped.
+because cloud edges are where masks fail. Snow is kept and flagged, never dropped. A
+pass whose offset flag contradicts its pixels has no clear pixels at all.
 
 The model's raw classes are cached per AOI next to the cube. Changing the dilation or
 the classes counted as cloud never reruns the model, and nothing here refetches imagery.
@@ -19,7 +20,7 @@ import numpy as np
 import xarray as xr
 from loguru import logger
 
-from orbitdiff import cube
+from orbitdiff import cube, radiometry
 from orbitdiff.config import BANDS, MaskingConfig
 
 SCL_NODATA = 0
@@ -60,19 +61,38 @@ def snow(scl: np.ndarray, scl_flag: Collection[int]) -> np.ndarray:
     return np.isin(scl, sorted(scl_flag))
 
 
+def offset_suspect(passes: xr.Dataset, cfg: MaskingConfig) -> np.ndarray:
+    """Passes (time,) whose dark targets read below zero after harmonizing: the BOA offset
+    was subtracted from pixels that didn't carry it, so the item's offset flag is wrong.
+
+    DN are never negative, so only a subtracted offset can trip this. A bright AOI can't
+    show the opposite mistake (an offset left in) this way, so it isn't checked. A pass
+    with too few reference pixels to judge keeps its metadata.
+    """
+    refl = cube.reflectance(passes)
+    dark = radiometry.dark_target(
+        refl["blue"].values,
+        refl["red"].values,
+        np.isin(passes["scl"].values, sorted(cfg.offset_check_scl)),
+        cfg.offset_check_percentile,
+        cfg.offset_check_min_pixels,
+    )
+    return dark < cfg.offset_check_min_dark  # NaN, too few pixels: False
+
+
 def clear_mask(
     passes: xr.Dataset, model_classes: np.ndarray | None, cfg: MaskingConfig
 ) -> np.ndarray:
     """Clear pixels (time, y, x) for a selection of cube passes.
 
     `model_classes` lines up with `passes` along time. None means SCL alone; that's for
-    comparing methods, never for compositing.
+    comparing methods, never for compositing. Offset-suspect passes have no clear pixels.
     """
     has_data = np.all([passes[band].values != 0 for band in BANDS], axis=0)
     clear = has_data & scl_clear(passes["scl"].values, cfg.scl_drop, cfg.dilate_px)
     if model_classes is not None:
         clear &= model_clear(model_classes, cfg.cloud_model_classes, cfg.dilate_px)
-    return clear
+    return clear & ~offset_suspect(passes, cfg)[:, None, None]
 
 
 def clear_fraction(clear: np.ndarray, aoi_mask: np.ndarray) -> np.ndarray:

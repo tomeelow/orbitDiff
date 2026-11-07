@@ -13,6 +13,7 @@ from functools import cache
 from geoalchemy2 import Geometry, WKBElement
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     DateTime,
     Engine,
     Float,
@@ -21,6 +22,7 @@ from sqlalchemy import (
     Integer,
     String,
     create_engine,
+    false,
     func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
@@ -73,6 +75,8 @@ class Scene(Base):
     # SCL + cloud model over this AOI when the bands were read; SCL alone when the pass
     # was too cloudy to read them; unknown when skipped on tile cloud.
     aoi_clear_frac: Mapped[float | None] = mapped_column(Float)
+    # Its offset flag contradicts its pixels, so no composite uses it (docs/spikes.md, 5).
+    offset_suspect: Mapped[bool] = mapped_column(Boolean, server_default=false())
     bytes_read: Mapped[int] = mapped_column(BigInteger)
     full_bytes: Mapped[int] = mapped_column(BigInteger)
 

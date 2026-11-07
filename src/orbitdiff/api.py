@@ -104,6 +104,7 @@ class SceneOut(BaseModel):
     catalog: str
     read_status: str
     aoi_clear_frac: float | None
+    offset_suspect: bool  # its offset flag contradicts its pixels: left out of composites
     images: dict[str, str] | None  # only for passes whose bands were read
 
 
@@ -269,6 +270,7 @@ def scenes(
             catalog=r.catalog,
             read_status=r.read_status,
             aoi_clear_frac=r.aoi_clear_frac,
+            offset_suspect=r.offset_suspect,
             images={
                 style: f"/aois/{aoi_id}/scenes/{r.item_id}/{style}.png"
                 for style in ("true_color", "ndvi")

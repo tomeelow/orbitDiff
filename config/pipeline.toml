@@ -34,6 +34,11 @@ dilate_px = 2                     # grow clouds and shadows by 20 m (one SCL pix
 cloud_model = "omnicloudmask"     # learned model on top of SCL, for haze and thin cirrus
 cloud_model_version = 4.0         # pinned: a new version means rerunning every AOI's masks
 cloud_model_classes = [1, 2, 3]   # model classes masked: thick cloud, thin cloud, shadow
+# A pass whose offset flag contradicts its pixels is left out (docs/spikes.md, section 5).
+offset_check_scl = [4, 5, 6]      # reference pixels: vegetation, bare soil, water
+offset_check_percentile = 2       # dark targets: this percentile of min(blue, red) reflectance
+offset_check_min_dark = -0.02     # correct passes read 0.006-0.07; offset subtracted twice, ~-0.09
+offset_check_min_pixels = 100     # fewer reference pixels than this: trust the metadata
 
 [composites]
 fill_max_months = 3               # display only: fill a pixel from clear months at most this far away

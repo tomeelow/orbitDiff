@@ -43,7 +43,7 @@ def test_model_masks_thick_thin_cloud_and_shadow():
     )
 
 
-def passes(scl, bands_value=1000, missing_band_at=None) -> xr.Dataset:
+def passes(scl, bands_value=1000, missing_band_at=None, offset_dn=0) -> xr.Dataset:
     data = {
         b: (("time", "y", "x"), np.full(scl.shape, bands_value, np.uint16))
         for b in ("blue", "green", "red", "nir")
@@ -51,7 +51,7 @@ def passes(scl, bands_value=1000, missing_band_at=None) -> xr.Dataset:
     if missing_band_at:
         data["nir"][1][missing_band_at] = 0
     data["scl"] = (("time", "y", "x"), scl)
-    return xr.Dataset(data)
+    return xr.Dataset(data, coords={"offset_dn": ("time", np.full(len(scl), offset_dn, np.int16))})
 
 
 def test_clear_mask_needs_data_in_every_band_and_both_methods_clear():
@@ -65,6 +65,27 @@ def test_clear_mask_needs_data_in_every_band_and_both_methods_clear():
     both = masking.clear_mask(ds, model, cfg)
     assert not scl_only[0, 0, 0] and scl_only[0, 8, 8]
     assert not both[0, 8, 8] and both.sum() == 9 * 9 - 2
+
+
+def test_a_pass_whose_offset_was_subtracted_twice_is_suspect_and_never_clear():
+    vegetation = np.full((1, 20, 20), 4, np.uint8)
+    cases = [
+        (150, 0),  # dark vegetation, no offset anywhere
+        (1150, -1000),  # offset in the pixels, and subtracted
+        (150, -1000),  # offset not in the pixels, but the flag says it is: ~-0.085
+    ]
+    ds = xr.concat([passes(vegetation, dn, offset_dn=off) for dn, off in cases], dim="time")
+    assert masking.offset_suspect(ds, CFG).tolist() == [False, False, True]
+    clear = masking.clear_mask(ds, None, CFG)
+    assert clear[:2].all() and not clear[2].any()
+
+
+def test_offset_check_trusts_the_metadata_when_it_cannot_judge():
+    scl = np.full((2, 20, 20), 9, np.uint8)  # cloud: bright, never a reference pixel
+    scl.reshape(2, -1)[0, : CFG.offset_check_min_pixels - 1] = 4
+    scl.reshape(2, -1)[1, : CFG.offset_check_min_pixels] = 4
+    ds = passes(scl, 150, offset_dn=-1000)
+    assert masking.offset_suspect(ds, CFG).tolist() == [False, True]
 
 
 def test_clear_fraction_counts_only_aoi_pixels():
