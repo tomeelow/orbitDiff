@@ -1,0 +1,169 @@
+# Orbit Diff
+
+Watch places for change from orbit. Draw a polygon around an area you care about, browse
+about ten years of Sentinel-2 imagery over it as cloud-free monthly composites, see what
+changed (new buildings and roads, forest loss, solar farms, water), and get an email when
+a new satellite pass shows a change.
+
+A change map is easy to make. The point of this project is an alert you can trust: one
+that survives clouds, haze, seasons and sensor quirks before it reaches your inbox.
+
+## Why it's hard
+
+Most things that look like change aren't:
+
+- **Clouds, haze and shadows**, including thin cirrus the scene classification misses.
+- **Seasons and crop cycles.** July against January finds winter, not change.
+- **Snow and floods**: real, but transient.
+- **Processing changes.** Processing baseline 04.00 (Jan 2022) added a −1000 offset to
+  the pixel values, and catalog metadata about it is not always right (see below).
+- **Misregistration.** Passes shift by up to about a pixel; roof and road edges flicker.
+
+So an event alerts only if it shows in clear pixels of real observations on both sides,
+falls outside the seasonal envelope, is larger than a minimum mapping unit, and is
+confirmed by a later clear pass. One scene is a suspicion. Gap-filled pixels are for
+display only and never count as evidence.
+
+## How it works
+
+```
+polygon → STAC search → windowed COG reads → cloud masking → monthly composites
+        → change detection → confirmation → alert → "not a real change" feedback
+```
+
+1. **Search.** [Earth Search](https://earth-search.aws.element84.com/v1) (`sentinel-2-l2a`,
+   COGs on AWS) is the primary catalog, with Microsoft Planetary Computer as the fallback.
+   Exactly one item is kept per pass: the newest processing baseline, and the tile in the
+   AOI's own UTM zone.
+2. **Read only what's needed.** Only the AOI's window is read, via HTTP range requests.
+   The 20 m scene classification (SCL) is read first, at about 1/50 of a pass's bytes, and
+   the 10 m bands only for passes with clear pixels over the AOI. Each AOI's passes are
+   cached once in a Zarr cube, so changing a mask or threshold never refetches imagery.
+   Bytes read are measured from the COG blocks each window touches and shown to the user.
+   On a 75-pass test run that was 248 MB, against 19.5 GB for the same files whole.
+3. **Harmonize.** One function turns digital numbers into surface reflectance for every
+   catalog, from the processing baseline and the catalog's offset flag. A per-pass pixel
+   check backs the flag: Earth Search marks some 2022 items wrongly, and following the
+   flag would subtract the offset twice. Such passes are kept out of every composite.
+4. **Mask.** SCL drops no data, defective pixels, cloud shadow, cloud and cirrus; snow is
+   kept and flagged. [OmniCloudMask](https://github.com/DPIRD-DMA/OmniCloudMask) runs on
+   top for the haze and thin cloud SCL misses. Both are dilated, because cloud edges are
+   where masks fail.
+5. **Composite.** A per-pixel median of clear observations per month, written as
+   Cloud-Optimized GeoTIFFs on a pinned grid in the AOI's UTM zone. Display copies fill
+   empty pixels from the nearest clear months and flag them. One code path serves both the
+   archive backfill and pass-by-pass updates; a test checks the two give byte-identical
+   files.
+6. **Detect** *(planned)*: a naive NDVI-difference baseline first, then CVA and BFAST on
+   anniversary composites, and a Siamese U-Net for buildings. Every detector is reported
+   against the baseline, by category and by hard case (cropland, floodplain, snow).
+7. **Confirm and alert** *(planned)*: events go `pending` → `confirmed` or `dismissed` on
+   the next clear pass; seasonal ones are labelled, not deleted. Emails carry before/after
+   crops, size, method, confidence, status and a signed "Not a real change" link. That
+   feedback is the precision signal and training data, and every event records the STAC
+   items, months, detector version and thresholds it came from.
+
+## Status
+
+| Phase | State |
+|---|---|
+| 0. Setup and spikes (coverage, offset, read cost, fallback) | done |
+| 1. Scene search and windowed reads into a per-AOI cube | done |
+| 2. Cloud masking: SCL plus OmniCloudMask | done |
+| 3. Monthly median composites as COGs | done |
+| 4. API, background backfills, map tiles | done |
+| 5. Web app: draw an AOI, browse the archive | next |
+| 6–8. Evaluation set, classical detectors, U-Net for buildings | planned |
+| 9–10. Watching, alerts, feedback, monitoring | planned |
+| 11–12. Deployment, documentation | planned |
+
+`mockup/orbit-diff.html` is the UX reference (synthetic imagery and events).
+
+## Stack
+
+- **Pipeline:** Python 3.12, rasterio, xarray, Zarr, pystac-client, shapely, pyproj;
+  OmniCloudMask in a separate `ml` dependency group.
+- **Backend:** FastAPI, Postgres + PostGIS (SQLAlchemy, GeoAlchemy2, Alembic), RQ on
+  Redis for backfill jobs, TiTiler for composite map tiles.
+- **Web app** *(Phase 5)*: React and MapLibre.
+- **Tooling:** uv, ruff, pytest, pre-commit, GitHub Actions.
+
+## Running it locally
+
+Requires [uv](https://docs.astral.sh/uv/) and Docker. No API keys are needed: Earth Search
+is open, and Planetary Computer issues an anonymous token.
+
+```bash
+uv sync --group ml                 # ml: the cloud model, needed by mask and worker
+docker compose up -d               # Postgres+PostGIS (5433), Redis, Mailpit, TiTiler (8001)
+uv run alembic upgrade head
+```
+
+Through the API, which queues a backfill per AOI:
+
+```bash
+uv run uvicorn orbitdiff.api:app   # http://localhost:8000/docs
+uv run orbitdiff worker            # runs queued backfills
+```
+
+```bash
+curl -X POST localhost:8000/aois -H 'content-type: application/json' \
+  -d '{"name": "Kyiv west", "geometry": {"type": "Polygon", "coordinates": [[[30.674, 50.3845], [30.701, 50.3845], [30.701, 50.396], [30.674, 50.396], [30.674, 50.3845]]]}}'
+```
+
+Then follow `/aois/{id}/progress`, and browse `/aois/{id}/timeline`, `/ndvi` and
+`/scenes?month=YYYY-MM`. Timeline entries carry TiTiler tile URLs for true colour and NDVI.
+
+Or step by step from the command line, with no database:
+
+```bash
+uv run orbitdiff fetch --aoi examples/aoi_kyiv.geojson --start 2021-06-01 --end 2021-09-30
+uv run orbitdiff mask --id aoi_kyiv
+uv run orbitdiff composites --id aoi_kyiv
+uv run orbitdiff mask-report --id aoi_kyiv   # contact sheet: SCL alone vs SCL + model
+```
+
+Everything lands in `data/` (cubes, masks, composites, STAC cache), which is never
+committed. AOIs are capped at 10 km².
+
+## Configuration
+
+- **`config/pipeline.toml`**: every pipeline parameter (catalogs and asset keys, AOI
+  size cap, archive start, SCL classes, dilation, cloud model version, offset check,
+  gap-fill distance, minimum mapping unit). No thresholds live in code.
+- **Environment** (`ORBITDIFF_*`, see `.env.example`): paths, database and Redis URLs,
+  and later the secrets. `.env` is never committed.
+
+## Tests
+
+```bash
+uv run pytest
+```
+
+Tests run offline. Rasters are small synthetic GeoTIFFs with staged changes, and sockets
+reach only localhost. The API tests need Postgres: set `ORBITDIFF_TEST_DATABASE_URL` to a
+database on the compose Postgres, otherwise they are skipped. CI runs everything against a
+PostGIS service.
+
+## Repository
+
+```
+src/orbitdiff/   pipeline, API and jobs
+tests/           unit and end-to-end tests
+config/          pipeline.toml
+migrations/      Alembic migrations
+spikes/          scripts behind the findings in docs/spikes.md
+docs/            implementation plan, ADRs, spike results
+mockup/          the UX reference
+docker/          TiTiler colormap
+examples/        a sample AOI
+```
+
+## Further reading
+
+- [`docs/implementation_plan.md`](docs/implementation_plan.md): direction and phases, with
+  as-built notes.
+- [`docs/ADR.md`](docs/ADR.md): decisions and why they changed.
+- [`docs/spikes.md`](docs/spikes.md): the measurements behind them: archive coverage,
+  the offset in metadata versus pixels, read cost, catalog fallback.
+- [`CLAUDE.md`](CLAUDE.md): working rules for this repository.
