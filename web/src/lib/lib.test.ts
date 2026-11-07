@@ -184,6 +184,7 @@ describe("routes", () => {
     expect(parseRoute("#/areas/3/changes/17")).toEqual({ page: "area", id: 3, change: 17 });
     expect(parseRoute("#/areas/3")).toEqual({ page: "area", id: 3, change: null });
     expect(parseRoute("#/new")).toEqual({ page: "new" });
+    expect(parseRoute("#/admin")).toEqual({ page: "admin" });
     expect(parseRoute("#/areas/x")).toEqual({ page: "areas" });
   });
 });

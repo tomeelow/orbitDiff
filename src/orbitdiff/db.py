@@ -216,6 +216,28 @@ class Notification(Base):
     error: Mapped[str | None] = mapped_column(String)
     claimed_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     sent_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # When the pass that set the status reported was acquired: sent_utc minus this is how
+    # long the alert took to reach someone (Phase 10).
+    pass_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class JobRun(Base):
+    """One backfill or update of one AOI: what it read and how it ended. Pipeline health
+    is computed from these rows (Phase 10)."""
+
+    __tablename__ = "job_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    aoi_id: Mapped[int] = mapped_column(ForeignKey("aois.id", ondelete="CASCADE"), index=True)
+    started_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    finished_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(16))  # running | ok | failed
+    error: Mapped[str | None] = mapped_column(String)
+    passes_read: Mapped[int] = mapped_column(Integer, default=0)  # new passes in the cube
+    passes_failed: Mapped[int] = mapped_column(Integer, default=0)  # left for the next run
+    fallback_passes: Mapped[int] = mapped_column(Integer, default=0)  # read from the fallback
+    bytes_read: Mapped[int] = mapped_column(BigInteger, default=0)
+    emails_sent: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class Feedback(Base):

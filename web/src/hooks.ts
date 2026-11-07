@@ -6,10 +6,12 @@ email's link to one change). */
 export type Route =
   | { page: "areas" }
   | { page: "new" }
+  | { page: "admin" }
   | { page: "area"; id: number; change: number | null };
 
 export function parseRoute(hash: string): Route {
   if (hash === "#/new") return { page: "new" };
+  if (hash === "#/admin") return { page: "admin" };
   const match = /^#\/areas\/(\d+)(?:\/changes\/(\d+))?$/.exec(hash);
   if (!match) return { page: "areas" };
   return { page: "area", id: Number(match[1]), change: match[2] ? Number(match[2]) : null };
@@ -75,7 +77,7 @@ export function useTheme(): [Theme, () => void] {
 export type Account =
   | { state: "loading" }
   | { state: "signed-out" }
-  | { state: "signed-in"; email: string }
+  | { state: "signed-in"; email: string; admin: boolean }
   | { state: "error"; message: string };
 
 /** Who is signed in. Any API answer of 401 signs the app out, wherever it came from. */
@@ -83,7 +85,7 @@ export function useAccount(): [Account, () => void, () => Promise<void>] {
   const [account, setAccount] = useState<Account>({ state: "loading" });
   const check = useCallback(() => {
     api.me().then(
-      (me) => setAccount({ state: "signed-in", email: me.email }),
+      (me) => setAccount({ state: "signed-in", ...me }),
       (error: unknown) =>
         setAccount(
           error instanceof ApiError && error.status === 401

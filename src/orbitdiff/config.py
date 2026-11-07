@@ -115,6 +115,14 @@ class AlertsConfig(_Section):
     feedback_link_days: int = Field(ge=1)
 
 
+class MonitoringConfig(_Section):
+    precision_days: int = Field(ge=1)
+    health_days: int = Field(ge=1)
+    min_precision: float = Field(ge=0, le=1)
+    min_alerts: int = Field(ge=1)
+    failures_shown: int = Field(ge=1)
+
+
 class AccountsConfig(_Section):
     login_link_minutes: int = Field(ge=1)
     session_days: int = Field(ge=1)
@@ -142,6 +150,7 @@ class PipelineConfig(_Section):
     composites: CompositesConfig
     detection: DetectionConfig
     alerts: AlertsConfig
+    monitoring: MonitoringConfig
     accounts: AccountsConfig
     evaluation: EvaluationConfig
     jobs: JobsConfig
@@ -173,6 +182,8 @@ class Settings(BaseSettings):
     mail_from: str = "Orbit Diff <alerts@orbitdiff.localhost>"
     # Signs the "Not a real change" links in alert emails. A secret: never in git.
     signing_key: SecretStr | None = None
+    # Who sees the admin view (pipeline health, alert precision). JSON list in the env.
+    admin_emails: list[str] = []
 
 
 def load_pipeline_config(path: Path) -> PipelineConfig:

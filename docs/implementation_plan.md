@@ -572,6 +572,13 @@ Start with SQL over Postgres and a small internal admin page. Add Prometheus and
 
 **Deliverable:** an admin view of precision by detector and category, pipeline health, and the retraining flag.
 
+> **As built (2026-11-07):**
+> - Every backfill writes a `job_runs` row (migration 0005): status, passes read, passes left to retry, passes read from the fallback catalog, bytes read and emails sent. A run whose sending fails is recorded as failed but leaves the area ready: its imagery and events are fine.
+> - `notifications.pass_utc` keeps the acquisition time of the pass that set the event's status, so the admin view shows the median time from pass to alert.
+> - `GET /admin/summary` (`orbitdiff.monitoring`, plain SQL) and the web app's `#/admin` page: precision from "Not a real change" per method version and category over `precision_days`, pipeline health over `health_days`, and recent failed runs. Admins are the addresses in `ORBITDIFF_ADMIN_EMAILS`; anyone else gets a 403. The view is aggregate: AOI ids at most, never names, geometries or email addresses.
+> - A category with at least `min_alerts` alerts and precision under `min_precision` is flagged "Review". Nothing acts on the flag: there's no retraining candidate to start until Phase 8, and thresholds stay a person's change, re-scored on the evaluation set. `[monitoring]` values are provisional.
+> - Not yet: evaluation-set scores on the page (they live in MLflow, which the API image doesn't carry), STAC search errors as a figure (they're logged, and a search that fails fails the run), and retries per job (RQ retries aren't recorded).
+
 ---
 
 ## Phase 11 — Containerization and Deployment
