@@ -1,0 +1,49 @@
+# Imagery, rasters and model weights never go in git: rasters live in object storage,
+# models in MLflow. Evaluation labels (small GeoJSON in eval/) are the exception.
+data/
+*.tif
+*.tiff
+*.jp2
+*.zarr/
+*.nc
+*.pt
+*.pth
+*.ckpt
+*.onnx
+
+# MLflow
+mlruns/
+mlartifacts/
+mlflow.db
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Web
+node_modules/
+web/dist/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Editor/agent scratch
+.claude/
