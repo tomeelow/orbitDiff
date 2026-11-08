@@ -11,6 +11,13 @@ This prints the benchmark table (event precision and recall, false alerts per AO
 median delay) with breakdowns by category and hard case. The run is logged to MLflow
 (`mlflow.db`) with the set's version, the method, and every threshold in force.
 
+Below the table it prints a **GFC cross-check**: each area's `vegetation_loss` events against
+[Hansen Global Forest Change](../README.md#data-and-attribution) loss years, and GFC's loss
+that no event covers. It reads only each area's window and logs as `gfc_crosscheck_*`. It is
+not part of the benchmark and never feeds the promotion gate. GFC is another model's annual
+map with its own errors and a lag, so treat disagreement as a place to look, never as a
+false alert or a miss. It says nothing about non-forest change, or anything after its last year.
+
 ## One file per area
 
 `<name>.geojson` is a FeatureCollection:

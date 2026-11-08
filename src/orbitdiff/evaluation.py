@@ -18,6 +18,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 from pydantic import BaseModel
@@ -42,6 +43,9 @@ from orbitdiff.detection import (
     observed_share,
 )
 from orbitdiff.fetch import fetch_aoi
+
+if TYPE_CHECKING:  # only `orbitdiff evaluate` runs the cross-check; the API imports this module
+    from orbitdiff.gfc import CrossCheck
 
 EVAL_DIR = Path(__file__).resolve().parents[2] / "eval"
 LABEL_CATEGORIES = tuple(c for c in CATEGORIES if c != "other")  # what a labelled change is
@@ -429,10 +433,11 @@ def evaluate(
     folder: Path = EVAL_DIR,
     fetch: bool = False,
     buildings: Learned | None = None,
+    cross_check: "CrossCheck | None" = None,
 ) -> tuple[dict[str, Report], str, bool]:
     """Score each named method over the evaluation set, with `buildings` as the building
     model if given. Returns the reports, the set's version and whether every AOI in it is
-    verified."""
+    verified. `cross_check` also collects each method's events, and changes no score."""
     aois, version = load_eval_set(folder)
     available = methods(cfg.detection, buildings)
     unknown = set(names) - set(available)
@@ -456,5 +461,7 @@ def evaluate(
             for row, confirmed_only in policies.items():
                 alerts = tuple(alerts_from(events, rule, confirmed_only))
                 runs.setdefault(row, []).append(AoiRun(aoi, labels, first_clear, alerts))
+                if cross_check:
+                    cross_check.add(row, aoi, grid, events, confirmed_only)
     verified = bool(aois) and all(a.verified for a in aois)
     return {n: score(r, cfg.evaluation) for n, r in runs.items()}, version, verified

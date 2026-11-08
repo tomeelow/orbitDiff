@@ -281,6 +281,9 @@ verified areas. Admins label them in the app (see `eval/README.md`):
 uv run orbitdiff evaluate --method naive --fetch
 ```
 
+It also prints a cross-check of `vegetation_loss` events against Hansen Global Forest Change
+loss years, which is a second opinion and not a score ([attribution](#data-and-attribution)).
+
 The building model (a Siamese U-Net) trains on OSCD, on CPU, and is registered in MLflow.
 It runs in production only once `promote` has checked it on the evaluation set: it must
 not raise false alerts, not lose recall, and beat the naive baseline. Without a verified
@@ -314,6 +317,26 @@ mockup/          an early UI sketch
 docker/          TiTiler colormap, backup image
 examples/        a sample AOI
 ```
+
+## Data and attribution
+
+**Hansen Global Forest Change** is used for one thing: a cross-check in `orbitdiff evaluate`,
+which compares `vegetation_loss` events with its loss years. It never touches detection, alerts
+or model promotion, and it isn't ground truth. It's another model's annual map, with errors of
+its own and a lag after each year ends, so it sits next to the labelled evaluation and doesn't
+replace it.
+
+- **Credit:** Source: Hansen/UMD/Google/USGS/NASA.
+- **Citation:** Hansen, M. C., P. V. Potapov, R. Moore, M. Hancher, S. A. Turubanova,
+  A. Tyukavina, D. Thau, S. V. Stehman, S. J. Goetz, T. R. Loveland, A. Kommareddy, A. Egorov,
+  L. Chini, C. O. Justice, and J. R. G. Townshend. 2013. "High-Resolution Global Maps of
+  21st-Century Forest Cover Change." *Science* 342 (15 November): 850–53. Data available on-line
+  from: <https://glad.earthengine.app/view/global-forest-change>.
+- **Licence:** [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The version is pinned
+  in `config/pipeline.toml`.
+- **Changes made:** windows of the `lossyear` and `treecover2000` layers are resampled onto each
+  area's 10 m UTM grid by nearest neighbour, and loss counts only where canopy in 2000 is at
+  least `min_treecover` percent. Nothing from GFC is redistributed here.
 
 ## Further reading
 
