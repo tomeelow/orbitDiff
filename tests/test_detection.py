@@ -197,6 +197,23 @@ def test_a_change_the_next_clear_pass_contradicts_is_dismissed(grid, cfg):
     assert e.history[-1] == ("dismissed", "2021-05-b", np.datetime64("2021-05-20"))
 
 
+def test_confidence_is_how_much_of_it_changed_on_the_passes_that_decided_it(grid, cfg):
+    values = landscape(grid)
+    stage(values, CLEARING, BARE, "2021-05")
+    (confirmed,) = run(grid, cfg, values, PRODUCTION)
+    assert confirmed.status == "confirmed" and confirmed.confidence == 1.0
+
+    # The second pass shows three quarters of it changed: still confirmed, less sure.
+    part = looks(grid, CLEARING, BARE)
+    y, x = CLEARING
+    part[:, y.start : y.start + 5, x] = FOREST[:, None, None]
+    (partly,) = run(grid, cfg, values, PRODUCTION, show={("2021-05", "b"): part})
+    assert partly.status == "confirmed" and partly.confidence == pytest.approx(0.875, abs=0.01)
+
+    (bare_detector,) = run(grid, cfg, values, "naive")
+    assert bare_detector.confidence is None  # only the production rules follow passes
+
+
 def test_a_change_no_single_pass_shows_is_not_an_event(grid, cfg):
     values = landscape(grid)
     stage(values, CLEARING, BARE, "2021-05", "2021-05")  # in the composite only

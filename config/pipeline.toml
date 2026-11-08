@@ -78,6 +78,8 @@ dark_nir = 0.15                   # and NIR below this: solar or industry
 default_min_ha = 0.5              # the "smallest change" a new alert rule starts with (mockup)
 max_min_ha = 5.0                  # top of that slider; its floor is detection.min_mapping_unit_ha
 send_attempts = 3                 # tries per email before it is given up and logged
+digest_over = 3                   # more emails than this due at once for an area become a digest
+digest_size = 10                  # changes per digest email
 feedback_link_days = 90           # how long an email's "Not a real change" link works
 
 [monitoring]                      # the admin view (Phase 10); flags only, never acts
@@ -86,10 +88,14 @@ health_days = 30                  # pipeline health over this many days
 min_precision = 0.7               # a category below this is flagged for review (PROVISIONAL)
 min_alerts = 10                   # ...once it has at least this many alerts in the window
 failures_shown = 10               # most recent failed runs listed
+retrain_min_new_labels = 20       # "Not a real change"s since the last candidate before another (PROVISIONAL)
 
 [accounts]
 login_link_minutes = 15           # a sign-in link works this long, any number of times
 session_days = 30                 # signed in on a device for this long
+login_limit_minutes = 60          # sign-in links asked for are counted over this window...
+login_per_email = 5               # ...at most this many to one address
+login_per_ip = 30                 # ...and this many from one address on the internet
 
 [evaluation]                      # matching detections to labelled events (eval/)
 min_overlap = 0.25                # intersection, as a share of the smaller footprint
@@ -107,6 +113,9 @@ patch_px = 96                     # square training crops, 960 m
 batch = 16
 steps = 3000                      # optimiser steps
 learning_rate = 1e-3
+# Feedback ("Not a real change") as hard negatives, when training with it.
+feedback_per_batch = 4            # of each batch's crops; the rest stay OSCD. PROVISIONAL
+feedback_val_every = 5            # one area in this many is held out, never trained on
 
 [buildings.oscd]                  # as TorchGeo pins it: a mirror at a fixed commit, checked by SHA-256
 url = "https://hf.co/datasets/hkristen/oscd/resolve/4958d786c1389ede1511d91a6ecf1a75c4074933/"
@@ -118,6 +127,7 @@ url = "https://hf.co/datasets/hkristen/oscd/resolve/4958d786c1389ede1511d91a6ecf
 
 [jobs]
 backfill_timeout_hours = 4         # a ten-year backfill reads ~1,400 passes
+retrain_timeout_hours = 6          # 3,000 steps took 19 minutes on a laptop CPU
 
 [schedule]
 poll_every_hours = 3              # ADR-008

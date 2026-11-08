@@ -26,10 +26,7 @@ display only and never count as evidence.
 
 ## How it works
 
-```
-polygon → STAC search → windowed COG reads → cloud masking → monthly composites
-        → change detection → confirmation → alert → "not a real change" feedback
-```
+![Orbit Diff's services, and the steps the worker runs for each area](docs/architecture.svg)
 
 1. **Search.** [Earth Search](https://earth-search.aws.element84.com/v1) (`sentinel-2-l2a`,
    COGs on AWS) is the primary catalog, with Microsoft Planetary Computer as the fallback.
@@ -56,8 +53,9 @@ polygon → STAC search → windowed COG reads → cloud masking → monthly com
    files.
 6. **Detect.** A naive NDVI-drop baseline, change vector analysis on anniversary
    composites, and a BFAST-style season-and-trend fit per pixel; production runs all three
-   with the rules below. A Siamese U-Net for buildings is next. Every detector is reported
-   against the baseline, by category and by hard case (cropland, floodplain, snow).
+   with the rules below. A Siamese U-Net for buildings joins them once it passes the gate
+   on the evaluation set. Every detector is reported against the baseline, by category and
+   by hard case (cropland, floodplain, snow).
 7. **Confirm.** A change must show in a single clear pass, not only in a monthly median.
    It starts `pending`; the next clear pass over its footprint makes it `confirmed` or
    `dismissed`. It is `seasonal` (labelled, never deleted) if snow covers it, if the place
@@ -70,16 +68,81 @@ polygon → STAC search → windowed COG reads → cloud masking → monthly com
    false alarms a later pass took back included. Turning alerts on starts from the newest
    pass already in the archive, so its history never arrives as a pile of emails. A
    scheduler queues an update for every watched area every few hours. A change alerts
-   once, with outlined before/after crops, size, NDVI, status and method, then at most once
-   more when it's confirmed, dismissed or found seasonal. Each email is claimed in the
-   database before it's sent, so a retried job never sends it twice.
+   once, with outlined before/after crops, size, NDVI, how much of it changed on the passes
+   that decided it, status and method, then at most once more when it's confirmed,
+   dismissed or found seasonal. Each email is claimed in the database before it's sent, so
+   a retried job never sends it twice. Many changes at once arrive as a digest.
 9. **Feedback.** "Not a real change", from the email (a signed link that needs no sign-in)
    or the app, is stored with the change's full provenance. It is the precision signal and
-   future training data, and it only measures precision: people only see what alerted.
+   training data, and it only measures precision: people only see what alerted.
 10. **Monitor.** An admin page shows alert precision from that feedback per method and
     category, flagging any that fall too low for a person to review (nothing changes on
-    its own), and pipeline health: runs and failures, passes read and left to retry,
-    fallback reads, bytes read, emails sent or failed, and time from pass to alert.
+    its own), the latest evaluation-set scores, and pipeline health: runs and failures,
+    passes read and left to retry, catalog errors and fallback, bytes read, emails sent or
+    failed, and time from pass to alert. When the building model's precision is flagged,
+    the feedback trains a retraining candidate. It is only registered: replacing the
+    champion is a person's decision, through the gate.
+
+## Results
+
+**There is no benchmark table yet.** The evaluation set's labels have to be checked against
+high-resolution imagery first, and numbers from unverified labels would measure nothing.
+`orbitdiff evaluate` prints the table, per method, category and hard case, once they are.
+
+The building model on OSCD's official test cities, scored per pixel: F1 0.392 (precision
+0.481, recall 0.332), from 0.05 on Valencia to 0.73 on Montpellier.
+
+## Why it doesn't cry wolf
+
+Over ten years of an 8.5 km² area around Grünheide, where the Tesla factory went up, the
+detectors found 1,604 candidate changes. The rules kept 232:
+
+| What happened to it | Changes |
+|---|---|
+| **Confirmed** by a later clear pass | 232 |
+| **Seasonal**: snow, a look the place has had before in that month, or it reverted | 1,225 |
+| **Dismissed**: the next clear pass didn't show it | 147 |
+
+Each rule answers one way of being wrong:
+
+- **Masking** removes cloud, shadow and cirrus from SCL, then haze and thin cloud with a
+  learned model, both dilated because cloud edges are where masks fail.
+- **Anniversary comparison** compares a month with the same month a year earlier, so winter
+  isn't a change. A BFAST-style seasonal model covers trends the anniversary misses.
+- **Minimum mapping unit** drops one- and two-pixel slivers along roads and roofs, where
+  misregistration lives. Below it, nothing can alert.
+- **Confirmation** treats one pass as a suspicion. Only the next clear pass over the footprint
+  can make it `confirmed`, and a false alert costs more than a late one.
+- **Real observations only.** Gap-filled months exist for the timelapse and are never evidence.
+
+Whether the 232 are right is what the evaluation set will say.
+
+## Read only what you need
+
+That same area's archive is 1,406 passes. Reading it cost **3.4 GB** of the 324 GB those files
+hold, about 1%. SCL comes first, at about 1/50 of a pass's bytes: 486 passes stopped at the
+tile's cloud-cover pre-filter, 315 at SCL, and only 605 needed their 10 m bands. Each block
+read is counted, and the total is shown to the user next to the area.
+
+The window stack is cached per area, so changing a mask or a threshold costs no bytes.
+
+## Trained on L1C, served on L2A
+
+OSCD, the training set, is top-of-atmosphere. The product reads surface reflectance. Raw
+values are far apart (blue on Chongqing: 0.125 against 0.073), so each image is standardised
+per band before the model sees it.
+
+One OSCD test city has both dates in the L2A archive, so the gap could be measured directly,
+on the same pixels:
+
+| Chongqing | F1 | Precision | Recall |
+|---|---|---|---|
+| L1C (trained on) | 0.246 | 0.705 | 0.149 |
+| L2A (served on) | 0.252 | 0.696 | 0.154 |
+
+The two runs agree on 99.59% of pixels. It's one city, and a city like the training data, so
+how the model behaves on forest and farmland is still the evaluation set's question. Details
+in [`docs/spikes.md`](docs/spikes.md), section 6.
 
 ## Status
 
@@ -95,9 +158,9 @@ polygon → STAC search → windowed COG reads → cloud masking → monthly com
 | 7. Classical detectors, events and statuses (thresholds provisional) | done |
 | 8. U-Net for buildings (promotion waits for verified labels) | in progress |
 | 9. Accounts, alert rules, alert emails, feedback | done |
-| 10. Monitoring: admin view of precision and pipeline health | done |
-| 11. Docker Compose stack (local); deployment | in progress |
-| 12. Documentation | planned |
+| 10. Monitoring, and retraining candidates from feedback | done |
+| 11. Docker Compose stack; production stack, releases and backups (built and run locally, not deployed yet) | in progress |
+| 12. Documentation (the benchmark waits for verified labels) | in progress |
 
 `mockup/orbit-diff.html` is an early sketch of the UI (synthetic imagery and events), not its final design.
 
@@ -110,6 +173,11 @@ polygon → STAC search → windowed COG reads → cloud masking → monthly com
 - **Web app:** Vite, React and TypeScript, MapLibre with Terra Draw, an OpenFreeMap
   basemap; Biome, Vitest, pnpm.
 - **Tooling:** uv, ruff, pytest, pre-commit, GitHub Actions.
+
+## Deploying
+
+[`docs/deploy.md`](docs/deploy.md): one machine behind Caddy, with what you need to provide,
+updates, backups and how to restore them.
 
 ## Running it locally
 
@@ -180,6 +248,16 @@ uv run orbitdiff mask-report --id aoi_kyiv   # contact sheet: SCL alone vs SCL +
 Everything lands in `data/` (cubes, masks, composites, STAC cache), which is never
 committed. AOIs are capped at 10 km².
 
+## What I'd do with more time
+
+- **Radar.** Sentinel-1 sees through cloud, so a confirmation wouldn't have to wait for a clear
+  optical pass. In a cloudy winter, that wait is the biggest part of an alert's delay.
+- **Larger areas.** Everything assumes areas under 10 km²: the windowed reads, the per-area
+  cube, a single worker. Going past that means tiling and object storage (ADR-014).
+- **A model that says what changed.** Today a category comes from rules on the spectral
+  change. A classifier trained on confirmed events would be more useful, once there are
+  enough of them.
+
 ## Configuration
 
 - **`config/pipeline.toml`**: every pipeline parameter (catalogs and asset keys, AOI
@@ -210,6 +288,7 @@ evaluation set, `promote` refuses.
 
 ```bash
 uv run --group ml orbitdiff train-buildings          # downloads OSCD (513 MB) once, into data/
+uv run --group ml orbitdiff train-buildings --feedback   # with "Not a real change" as negatives
 uv run --group ml orbitdiff evaluate --model-version 1
 uv run --group ml orbitdiff promote --version 1      # then restart the worker
 ```
@@ -229,9 +308,10 @@ config/          pipeline.toml
 eval/            the evaluation set: labelled areas, in git
 migrations/      Alembic migrations
 spikes/          scripts behind the findings in docs/spikes.md
-docs/            implementation plan, ADRs, spike results
+docs/            implementation plan, ADRs, spike results, deploy runbook
+deploy/          production compose file, Caddy, backups, updates
 mockup/          an early UI sketch
-docker/          TiTiler colormap
+docker/          TiTiler colormap, backup image
 examples/        a sample AOI
 ```
 

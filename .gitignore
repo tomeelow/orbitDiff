@@ -1,6 +1,7 @@
 # Imagery, rasters and model weights never go in git: rasters live in object storage,
 # models in MLflow. Evaluation labels (small GeoJSON in eval/) are the exception.
 data/
+backups/
 *.tif
 *.tiff
 *.jp2

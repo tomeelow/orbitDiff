@@ -276,5 +276,57 @@ factory goes up inside the area: the flags rise about tenfold, then fall back.
 
 All of this is qualitative: no labels say which flagged pixels are right. The model's
 event precision and recall on L2A come from the evaluation set, once it is verified.
-OSCD has one test city with both dates inside the L2A archive (Chongqing, 2017-04 and
-2018-04). Scoring the model there on L1C and on L2A would measure the gap directly.
+
+### Measured directly: one city, both levels (2026-11-08)
+
+OSCD has one test city with both dates inside the L2A archive: Chongqing, 2017-04-14 and
+2018-04-02. `spikes/buildings_l2a_gap.py --version 1` scores the model against OSCD's labels
+on OSCD's own L1C, and on the L2A passes of the same tile and days, read from Earth Search
+onto OSCD's grid. Both are scored on the same pixels: the 94.2% clear on both dates by SCL,
+24,641 of them changed.
+
+| Input | F1 | Precision | Recall | Pixels flagged |
+|---|---|---|---|---|
+| L1C (what it trained on) | 0.246 | 0.705 | 0.149 | 1.39% |
+| L2A (what it serves on) | 0.252 | 0.696 | 0.154 | 1.45% |
+
+The model scores the same on either. The two agree on 99.59% of pixels, and of the pixels
+either one flags, both flag 74.8%. So on this city the L1C-to-L2A step costs nothing
+measurable, and the raw gap (blue 0.125 against 0.073 here) is taken out by standardising.
+
+It is one city and one pair, and it's a city, like the training data. It says the input
+level isn't the problem. It says nothing about how the model does on forest and farmland,
+which only the evaluation set can.
+
+## 7. Feedback as hard negatives: a first look (2026-11-08)
+
+There is no real feedback yet, so Grünheide's 146 usable `dismissed` events stood in for
+"Not a real change": 67 from before 2023 to train on, 79 from 2023 on held out. Two full
+training runs, same seed, same OSCD crops. Nothing was registered.
+
+| Training | Validation F1 | OSCD test F1 | Precision | Recall | Held-out false alarms |
+|---|---|---|---|---|---|
+| OSCD only | 0.437 | 0.403 | 0.444 | 0.369 | 20.1% |
+| OSCD + 67 hard negatives | 0.415 | 0.313 | 0.413 | 0.252 | 4.1% |
+
+"Held-out false alarms" is the share of held-out "not real" pixels the model still calls
+changed.
+
+**It learns what it's told, and it pays for it.** False alarms on the held-out events fall
+fivefold. Recall on OSCD's test cities falls by a third, and precision there doesn't improve.
+At 4 of 16 crops per batch the model has become more reluctant to call anything a change.
+A candidate like this should fail the promotion gate, which allows a recall loss of 0.02.
+
+Don't read much more into it:
+
+- Dismissed events aren't people's feedback: a pass that didn't confirm a change is a
+  different thing from someone looking at it and saying no.
+- With one area the split had to be by time, so the held-out pixels are in the place the
+  model trained on. The product splits by area, and the 4.1% is likely flattering.
+- `feedback_per_batch = 4` is a first guess. The right share should be chosen on the verified
+  evaluation set, never on OSCD's test cities.
+
+**Reproducibility.** The first row isn't version 1's numbers (validation 0.416, test 0.392).
+The seed and crops are the same, but the loss is now averaged per patch, which is the same
+maths with different floating-point rounding. Over 3,000 steps that moved F1 by about 0.02, so
+differences of that size between two runs are noise.

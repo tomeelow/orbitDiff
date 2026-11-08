@@ -165,6 +165,9 @@ class Event(Base):
     )
     ndvi_before: Mapped[float | None] = mapped_column(Float)
     ndvi_after: Mapped[float | None] = mapped_column(Float)
+    # Share of the footprint that changed on the passes that decided it. A measured share,
+    # not a probability it is real. None until the area's next detection run fills it in.
+    confidence: Mapped[float | None] = mapped_column(Float)
     detected_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # first seen
     status_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # current status since
     history: Mapped[list] = mapped_column(JSON)  # [{"status", "cause", "at"}], oldest first
@@ -236,6 +239,9 @@ class JobRun(Base):
     passes_read: Mapped[int] = mapped_column(Integer, default=0)  # new passes in the cube
     passes_failed: Mapped[int] = mapped_column(Integer, default=0)  # left for the next run
     fallback_passes: Mapped[int] = mapped_column(Integer, default=0)  # read from the fallback
+    read_retries: Mapped[int] = mapped_column(Integer, default=0)  # reads tried again
+    search_errors: Mapped[int] = mapped_column(Integer, default=0)  # a catalog didn't answer
+    search_fallbacks: Mapped[int] = mapped_column(Integer, default=0)  # years the fallback found
     bytes_read: Mapped[int] = mapped_column(BigInteger, default=0)
     emails_sent: Mapped[int] = mapped_column(Integer, default=0)
 

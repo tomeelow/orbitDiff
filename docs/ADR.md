@@ -441,3 +441,72 @@ address for alerts, and emails that are never sent twice and never sent about hi
 Users wanting a password or SSO, abuse of the login endpoint (add rate limiting first), or
 a deployment where the API and the web app are not same-site, which the SameSite=Lax cookie
 assumes.
+
+---
+
+## ADR-013 — Map tiles go through the API; TiTiler is never exposed
+
+**Status:** accepted · **Date:** 2026-11-08
+
+### Context
+
+TiTiler renders whatever file its `url=` parameter names. With the browser talking to it
+directly, anyone who could reach it could read any area's composites, and an area around
+someone's home is personal data (CLAUDE.md). Phase 9 left this open until deployment.
+
+### Decision
+
+The web app asks the API for tiles and point values
+(`/aois/{id}/months/{YYYY-MM}/tiles/...`, `/point/...`). The API checks the session and the
+area's owner, builds TiTiler's URL itself, and relays the answer. TiTiler has no public
+port: in development it listens on 127.0.0.1 only, for an API running on the same machine,
+and in deployment it isn't published at all.
+
+### Reasoning
+
+- Signed URLs would need code inside TiTiler to check them. A reverse-proxy `auth_request`
+  would put the ownership rule in a second place. A relay keeps it in the one check every
+  other AOI endpoint already uses.
+- A caller can't choose the file: nothing in the request reaches `url=`.
+- The cost is a thread and two primary-key lookups per tile, and those tiles are served
+  `private, immutable`, so a browser asks for each one once. The database connection is
+  handed back before TiTiler is called, since a map asks for many tiles at once.
+
+### What would change our mind
+
+Many concurrent users making the API the bottleneck for tiles: signed URLs checked at the
+proxy, or pre-rendered frames per AOI-month (ADR-007's alternative).
+
+---
+
+## ADR-014 — On one machine, rasters stay on its disk; object storage is a nightly mirror
+
+**Status:** accepted · **Date:** 2026-11-08 · **Changes:** ADR-006
+
+### Context
+
+ADR-006 put each AOI's Zarr cube and monthly COGs in object storage. Everything since has
+read them from `data/` on a shared disk: the pipeline, TiTiler, and every worker. The
+deployment direction is one machine (implementation plan, Phase 11).
+
+### Decision
+
+- On the single machine, rasters stay on local disk, as they do in development.
+- Object storage, when it's configured, is a nightly `rclone sync` mirror of `cubes`,
+  `masks` and `composites`, next to the Postgres dumps.
+- The Postgres dumps are the backup that matters. Rasters can be rebuilt from STAC.
+
+### Why
+
+- Reading Zarr and COGs from object storage needs `s3fs` or `obstore` (a new dependency), a
+  credentialled code path in the fetch, composite and tile steps, and a TiTiler that signs
+  its reads. All of that would buy nothing on one machine, where the disk is faster and has
+  no egress bill.
+- 10 km² areas are small: Grünheide's ten years, with every pass and composite, is under
+  500 MB, so a 40 GB disk holds dozens of areas.
+
+### Consequences
+
+- The machine's disk limits how many areas it can hold, and a second worker machine would
+  need shared storage. That's the moment to implement ADR-006 as first written.
+- `rclone sync` is a mirror, not a history: a raster deleted here is deleted there.

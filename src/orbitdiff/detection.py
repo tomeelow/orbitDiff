@@ -436,10 +436,18 @@ class Event:
     items: list[str] = field(default_factory=list)  # passes clear over it in both months
     status: str = "pending"
     history: list[tuple[str, str, np.datetime64]] = field(default_factory=list)
+    # With rules: the share of the footprint that changed on each pass that decided it.
+    shares: list[float] = field(default_factory=list)
 
     @property
     def area_ha(self) -> float:
         return round(float(self.pixels.sum() * PIXEL_HA), 2)
+
+    @property
+    def confidence(self) -> float | None:
+        """How much of the footprint changed on the passes that decided it, 0 to 1. A
+        measured share, not a probability that the change is real."""
+        return round(float(np.mean(self.shares)), 3) if self.shares else None
 
     def set(self, status: str, cause: str, at: np.datetime64) -> None:
         """Move to `status`, recording what caused it (a pass or a month) and when."""
@@ -458,19 +466,19 @@ def observed_share(pixels: np.ndarray, *layers: np.ndarray) -> float:
     return float(seen.sum() / pixels.sum())
 
 
-def verdict(
+def agreement(
     detector: Detector,
     reference: np.ndarray | list,
     observation: np.ndarray,
     pixels: np.ndarray,
     cfg: DetectionConfig,
-) -> bool | None:
-    """Whether an observation shows the change over its footprint: None when too little of
+) -> float | None:
+    """The share of the footprint an observation shows as changed: None when too little of
     the footprint is seen on both sides to tell."""
     seen = pixels & detector.comparable(reference) & ~np.isnan(observation[0])
     if seen.sum() < cfg.footprint_clear_frac * pixels.sum():
         return None
-    return bool(detector.changed(reference, observation)[seen].mean() >= cfg.agree_frac)
+    return float(detector.changed(reference, observation)[seen].mean())
 
 
 class _References:
@@ -497,11 +505,13 @@ def _first_clear(month: str, pixels: np.ndarray, passes: Passes, cfg: DetectionC
 
 
 def _first_showing(month, pixels, passes, refs, detector, cfg):
-    """With rules: the first pass in `month` that shows the change itself, or None."""
+    """With rules: the first pass in `month` that shows the change itself, how much of the
+    footprint it shows changed, or None."""
     reference = refs.get(month, month)
     for o in passes.in_month(month):
-        if verdict(detector, reference, o.values, pixels, cfg):
-            return o.item_id, o.acquired
+        share = agreement(detector, reference, o.values, pixels, cfg)
+        if share is not None and share >= cfg.agree_frac:
+            return o.item_id, o.acquired, share
     return None
 
 
@@ -570,9 +580,11 @@ def _follow(
         for o in passes.in_month(month):
             if o.acquired <= event.detected:
                 continue
-            agrees = verdict(detector, reference, o.values, event.pixels, cfg)
-            if agrees is not None:
-                event.set("confirmed" if agrees else "dismissed", o.item_id, o.acquired)
+            share = agreement(detector, reference, o.values, event.pixels, cfg)
+            if share is not None:
+                event.shares.append(share)
+                confirmed = share >= cfg.agree_frac
+                event.set("confirmed" if confirmed else "dismissed", o.item_id, o.acquired)
                 break
         if event.status != "pending":
             break
@@ -584,10 +596,10 @@ def _follow(
         values, reference = stack.at(month), refs.get(month, m)
         if values is None:
             break
-        if (
-            reference is not None
-            and verdict(detector, reference, values, event.pixels, cfg) is False
-        ):
+        share = (
+            None if reference is None else agreement(detector, reference, values, event.pixels, cfg)
+        )
+        if share is not None and share < cfg.agree_frac:
             obs = passes.in_month(month)
             at = obs[-1].acquired if obs else np.datetime64(month, "D")
             event.set("seasonal", f"reverted by {month}", at)
@@ -633,6 +645,7 @@ def detect(
                 ],
             )
             if method.rules:
+                event.shares.append(seen[2])
                 snowy = _snow_month(stack, (before_month, month), pixels, cfg)
                 if snowy:
                     event.set("seasonal", f"snow in {snowy}", event.detected)

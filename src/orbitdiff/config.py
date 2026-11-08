@@ -114,6 +114,8 @@ class AlertsConfig(_Section):
     default_min_ha: float = Field(gt=0)
     max_min_ha: float = Field(gt=0)
     send_attempts: int = Field(ge=1)
+    digest_over: int = Field(ge=1)
+    digest_size: int = Field(ge=2)
     feedback_link_days: int = Field(ge=1)
 
 
@@ -123,11 +125,15 @@ class MonitoringConfig(_Section):
     min_precision: float = Field(ge=0, le=1)
     min_alerts: int = Field(ge=1)
     failures_shown: int = Field(ge=1)
+    retrain_min_new_labels: int = Field(ge=1)
 
 
 class AccountsConfig(_Section):
     login_link_minutes: int = Field(ge=1)
     session_days: int = Field(ge=1)
+    login_limit_minutes: int = Field(ge=1)
+    login_per_email: int = Field(ge=1)
+    login_per_ip: int = Field(ge=1)
 
 
 class EvaluationConfig(_Section):
@@ -151,11 +157,14 @@ class BuildingsConfig(_Section):
     batch: int = Field(ge=1)
     steps: int = Field(ge=1)
     learning_rate: float = Field(gt=0)
+    feedback_per_batch: int = Field(ge=1)
+    feedback_val_every: int = Field(ge=2)
     oscd: OscdConfig
 
 
 class JobsConfig(_Section):
     backfill_timeout_hours: float = Field(gt=0)
+    retrain_timeout_hours: float = Field(gt=0)
 
 
 class ScheduleConfig(_Section):
@@ -191,15 +200,18 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     # Evaluation and training runs (Phase 6 on). A local SQLite store in development.
     mlflow_tracking_uri: str = f"sqlite:///{REPO_ROOT / 'mlflow.db'}"
-    titiler_url: str = "http://localhost:8001"  # as the browser reaches it
+    titiler_url: str = "http://localhost:8001"  # as the API reaches it; browsers never do
     titiler_data_dir: str = "/data"  # where TiTiler sees data_dir
     cors_origins: list[str] = ["http://localhost:5173"]  # the web app's dev server
     # Links in emails point here, as the browser reaches them.
     web_url: str = "http://localhost:5173"
     api_url: str = "http://localhost:8000"
-    # Development sends every email to Mailpit; a deployment points this at its provider.
+    # Development sends every email to Mailpit; a deployment points these at its provider.
     smtp_host: str = "localhost"
     smtp_port: int = 1025
+    smtp_starttls: bool = False  # on for any real provider, or credentials travel in clear
+    smtp_username: str | None = None
+    smtp_password: SecretStr | None = None
     mail_from: str = "Orbit Diff <alerts@orbitdiff.localhost>"
     # Signs the "Not a real change" links in alert emails. A secret: never in git.
     signing_key: SecretStr | None = None

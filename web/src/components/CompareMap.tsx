@@ -238,7 +238,11 @@ export function CompareMap({
     const z = Math.max(0, Math.min(22, Math.round(map.getZoom())));
     const controller = new AbortController();
     for (const t of tilesCovering(visible, z).slice(0, 16)) {
-      fetch(tileUrl(template, t), { signal: controller.signal, mode: "cors" }).catch(() => {});
+      fetch(tileUrl(template, t), {
+        signal: controller.signal,
+        mode: "cors",
+        credentials: "include",
+      }).catch(() => {});
     }
     return () => controller.abort();
   }, [next, layer, ready, bounds]);
@@ -319,7 +323,7 @@ export function CompareMap({
       {readout && <ReadoutLine readout={readout} />}
       {tileError && (
         <p className="map-error" role="alert">
-          Imagery tiles failed to load. Is TiTiler running on port 8001?
+          Imagery tiles failed to load. Reload the page, or try again in a moment.
         </p>
       )}
     </div>

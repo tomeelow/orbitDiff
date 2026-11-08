@@ -47,6 +47,7 @@ function Summary() {
         </div>
       </header>
       <PrecisionSection data={data} />
+      <EvaluationSection data={data} />
       <HealthSection data={data} />
       <FailuresSection data={data} />
     </main>
@@ -60,9 +61,16 @@ function PrecisionSection({ data }: { data: AdminSummary }) {
       <p className="muted small">
         From “Not a real change” on alerts that were sent. People only see what alerted, so this
         says nothing about missed changes: the evaluation set measures those. A category under{" "}
-        {formatPercent(data.min_precision)} with enough alerts is flagged for review; nothing
-        changes on its own.
+        {formatPercent(data.min_precision)} with enough alerts is flagged for review. Thresholds
+        stay a person's change. A flagged building model starts a retraining candidate, which only
+        runs after <span className="fig">orbitdiff promote</span> passes the gate.
       </p>
+      {data.retraining && (
+        <p className="small">
+          Latest candidate queued {formatUtc(data.retraining.queued_utc)} UTC, from{" "}
+          {data.retraining.labels} “Not a real change” labels.
+        </p>
+      )}
       {data.precision.length === 0 ? (
         <p className="muted">No alerts sent in the last {data.precision_days} days.</p>
       ) : (
@@ -117,6 +125,67 @@ function PrecisionSection({ data }: { data: AdminSummary }) {
   );
 }
 
+const number = (value: number | null, digits = 2) => (value === null ? "—" : value.toFixed(digits));
+
+function EvaluationSection({ data }: { data: AdminSummary }) {
+  const scored = data.evaluation;
+  return (
+    <section className="admin-section" aria-labelledby="evaluation-title">
+      <h2 id="evaluation-title">Evaluation set</h2>
+      {scored === null ? (
+        <p className="muted">
+          Not scored yet. <span className="fig">orbitdiff evaluate</span> puts its results here.
+        </p>
+      ) : (
+        <>
+          <p className="muted small">
+            Set <span className="fig">{scored.eval_set}</span>, scored{" "}
+            {formatUtc(scored.scored_utc)} UTC. It measures what feedback can't: missed changes and
+            false alerts on quiet areas.
+          </p>
+          {!scored.verified && (
+            <p className="warn-text small">
+              Its labels are not all verified, so these numbers are not a benchmark.
+            </p>
+          )}
+          <div className="table-scroll">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th scope="col">Method</th>
+                  <th scope="col" className="num">
+                    Precision
+                  </th>
+                  <th scope="col" className="num">
+                    Recall
+                  </th>
+                  <th scope="col" className="num">
+                    False alerts / area-year
+                  </th>
+                  <th scope="col" className="num">
+                    Median delay (days)
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {scored.rows.map((row) => (
+                  <tr key={row.method}>
+                    <td className="fig">{row.method}</td>
+                    <td className="num fig">{number(row.precision)}</td>
+                    <td className="num fig">{number(row.recall)}</td>
+                    <td className="num fig">{number(row.false_alerts_per_aoi_year)}</td>
+                    <td className="num fig">{number(row.median_delay_days, 0)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 function HealthSection({ data }: { data: AdminSummary }) {
   const h = data.health;
   const rows: [string, string, boolean?][] = [
@@ -124,6 +193,9 @@ function HealthSection({ data }: { data: AdminSummary }) {
     ["Passes read", String(h.passes_read)],
     ["Passes left to retry", String(h.passes_failed), h.passes_failed > 0],
     ["Read from the fallback catalog", String(h.fallback_passes), h.fallback_passes > 0],
+    ["Reads tried again", String(h.read_retries), h.read_retries > 0],
+    ["Catalog searches failed", String(h.search_errors), h.search_errors > 0],
+    ["Years searched on the fallback", String(h.search_fallbacks), h.search_fallbacks > 0],
     ["Data read", formatBytes(h.bytes_read)],
     ["Median run", h.median_run_minutes === null ? "—" : `${h.median_run_minutes} min`],
     ["Emails sent", String(h.emails_sent)],

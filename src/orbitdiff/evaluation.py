@@ -16,10 +16,11 @@ import re
 import statistics
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import numpy as np
+from pydantic import BaseModel
 from rasterio.features import geometry_mask
 from shapely.geometry import shape
 from shapely.geometry.base import BaseGeometry
@@ -362,6 +363,54 @@ def metrics(report: Report) -> dict[str, float]:
                 if value is not None:
                     out[f"{stem}{name}"] = value
     return out
+
+
+class Benchmark(BaseModel):
+    """One row of the benchmark table."""
+
+    method: str
+    precision: float | None
+    recall: float | None
+    false_alerts_per_aoi_year: float | None
+    median_delay_days: float | None
+
+
+class Scored(BaseModel):
+    """The latest full `orbitdiff evaluate`, kept where the API can show it: MLflow, which
+    has every run, isn't in the API's image."""
+
+    eval_set: str  # the set's version: a hash of its label files
+    verified: bool  # False: these numbers are not a benchmark
+    scored_utc: datetime
+    rows: list[Benchmark]
+
+
+def _scored_path(data_dir: Path) -> Path:
+    return data_dir / "reports" / "evaluation.json"
+
+
+def save_scored(reports: dict[str, Report], version: str, verified: bool, data_dir: Path) -> None:
+    rows = [
+        Benchmark(
+            method=name,
+            precision=r.overall.precision,
+            recall=r.overall.recall,
+            false_alerts_per_aoi_year=r.overall.false_alerts_per_aoi_year,
+            median_delay_days=r.overall.median_delay_days,
+        )
+        for name, r in reports.items()
+    ]
+    scored = Scored(eval_set=version, verified=verified, scored_utc=datetime.now(UTC), rows=rows)
+    path = _scored_path(data_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    partial = path.with_suffix(".part")  # the API may be reading the last one
+    partial.write_text(scored.model_dump_json(indent=2))
+    partial.replace(path)
+
+
+def load_scored(data_dir: Path) -> Scored | None:
+    path = _scored_path(data_dir)
+    return Scored.model_validate_json(path.read_text()) if path.exists() else None
 
 
 def prepare(aoi: EvalAoi, grid: AOIGrid, cfg: PipelineConfig, data_dir: Path) -> None:

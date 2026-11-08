@@ -12,7 +12,7 @@ import urllib.request
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
@@ -97,6 +97,15 @@ def scene_item(item: pystac.Item, catalog: Catalog) -> SceneItem:
     )
 
 
+@dataclass
+class SearchLog:
+    """What a job's searches ran into, for the admin view. Lists, because searches run in
+    parallel and appending is atomic."""
+
+    errors: list[str] = field(default_factory=list)  # "<catalog> <year>": it didn't answer
+    fallbacks: list[str] = field(default_factory=list)  # "<catalog> <year>": the fallback did
+
+
 def _client(catalog: Catalog) -> Client:
     retry = Retry(
         total=5, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504], allowed_methods=None
@@ -120,7 +129,11 @@ def _cache_file(cache_dir: Path, catalog: Catalog, aoi: BaseGeometry, year: int)
 
 
 def search_year(
-    catalogs: Sequence[Catalog], aoi: BaseGeometry, year: int, cache_dir: Path | None = None
+    catalogs: Sequence[Catalog],
+    aoi: BaseGeometry,
+    year: int,
+    cache_dir: Path | None = None,
+    log: SearchLog | None = None,
 ) -> list[SceneItem]:
     """All items over the AOI in one year, from the first catalog that answers.
 
@@ -132,15 +145,18 @@ def search_year(
         if cache.exists():
             return [SceneItem.from_json(d) for d in json.loads(cache.read_text())]
 
+    log = log if log is not None else SearchLog()
     for catalog in catalogs:
         cache = caches.get(catalog.name)
         try:
             items = _search_year(catalog, aoi, year)
         except Exception as exc:  # network, HTTP or parsing: try the next catalog
             logger.warning("search on {} failed for {}: {!r}", catalog.name, year, exc)
+            log.errors.append(f"{catalog.name} {year}")
             continue
         if catalog is not catalogs[0]:
             logger.warning("used fallback catalog {} for {}", catalog.name, year)
+            log.fallbacks.append(f"{catalog.name} {year}")
         if cache:
             cache.parent.mkdir(parents=True, exist_ok=True)
             cache.write_text(json.dumps([i.to_json() for i in items]))
@@ -154,11 +170,12 @@ def search(
     start: date,
     end: date,
     cache_dir: Path | None = None,
+    log: SearchLog | None = None,
 ) -> list[SceneItem]:
     """Items over the AOI between start and end (inclusive), one search per year in parallel."""
     years = list(range(start.year, end.year + 1))
     with ThreadPoolExecutor(max_workers=len(years)) as pool:
-        per_year = pool.map(lambda y: search_year(catalogs, aoi, y, cache_dir), years)
+        per_year = pool.map(lambda y: search_year(catalogs, aoi, y, cache_dir, log), years)
     return [i for items in per_year for i in items if start <= i.acquired.date() <= end]
 
 

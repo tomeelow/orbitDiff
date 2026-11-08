@@ -1,9 +1,8 @@
 """The REST API the web app talks to. Run: `uv run uvicorn orbitdiff.api:app`.
 
 Every AOI endpoint needs a signed-in user and answers only for that user's own AOIs: any
-other AOI is a 404, never a 403, so ids don't reveal what exists. The map tiles TiTiler
-serves are not behind this yet (Phase 11), so this must not be exposed beyond a
-development machine.
+other AOI is a 404, never a 403, so ids don't reveal what exists. That includes the map
+tiles: TiTiler is never exposed, and the API relays what it renders (ADR-013).
 """
 
 import base64
@@ -17,13 +16,15 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import numpy as np
-from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Response
+from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import Path as PathParam
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 from geoalchemy2.shape import from_shape, to_shape
 from loguru import logger
 from pydantic import BaseModel, Field
 from redis import Redis
+from redis.exceptions import RedisError
 from shapely import set_precision
 from shapely.geometry import mapping, shape
 from sqlalchemy import func, select, text
@@ -71,6 +72,7 @@ def get_redis() -> Redis:
 
 
 SessionDep = Annotated[Session, Depends(get_session)]
+RedisDep = Annotated[Redis, Depends(get_redis)]
 SessionCookie = Annotated[str | None, Cookie(alias=accounts.COOKIE)]
 
 
@@ -303,10 +305,60 @@ def timeline(aoi_id: int, s: SessionDep, user: UserDep) -> list[MonthOut]:
             observed_frac=m.observed_frac,
             filled_frac=m.filled_frac,
             gap=m.observed_frac == 0,
-            tiles=tiles.composite_urls(aoi_id, m.month, m.version),
+            tiles=tiles.composite_paths(aoi_id, m.month, m.version),
         )
         for m in _months(s, aoi_id, user)
     ]
+
+
+MonthKey = Annotated[str, PathParam(pattern=r"^\d{4}-(0[1-9]|1[0-2])$", description="YYYY-MM")]
+
+
+def _relayed(url: str, media_type: str) -> Response:
+    """TiTiler's answer for the browser. The URLs carry the month's version, so what they
+    return never changes, but it's one person's area: their browser may keep it, a shared
+    cache may not."""
+    try:
+        status, body, _ = tiles.fetch(url)
+    except OSError as exc:
+        logger.warning("tile server unreachable: {!r}", exc)
+        raise HTTPException(502, "the tile server isn't reachable") from exc
+    if status == 404:  # outside the composite, or no composite for the month
+        raise HTTPException(404, "no tile here")
+    if status != 200:
+        logger.warning("tile server answered {}", status)
+        raise HTTPException(502, "the tile server failed")
+    return Response(
+        body,
+        media_type=media_type,
+        headers={"Cache-Control": "private, max-age=31536000, immutable"},
+    )
+
+
+@app.get("/aois/{aoi_id}/months/{month}/tiles/{layer}/{z}/{x}/{y}.png")
+def composite_tile(
+    aoi_id: int,
+    month: MonthKey,
+    layer: tiles.Layer,
+    z: int,
+    x: int,
+    y: int,
+    s: SessionDep,
+    user: UserDep,
+) -> Response:
+    _aoi(s, aoi_id, user)
+    s.close()  # hand back the connection: a map asks for many tiles at once
+    return _relayed(tiles.tile_url(aoi_id, month, layer, z, x, y), "image/png")
+
+
+@app.get("/aois/{aoi_id}/months/{month}/point/{lon},{lat}")
+def composite_point(
+    aoi_id: int, month: MonthKey, lon: float, lat: float, s: SessionDep, user: UserDep
+) -> Response:
+    """The hover readout: {"values": [NDVI, 1 if filled for display else 0], ...}."""
+    _aoi(s, aoi_id, user)
+    s.close()
+    return _relayed(tiles.point_url(aoi_id, month, lon, lat), "application/json")
 
 
 @app.get("/aois/{aoi_id}/ndvi")
@@ -397,6 +449,7 @@ class EventOut(BaseModel):
     geometry: dict  # GeoJSON, EPSG:4326
     ndvi_before: float | None
     ndvi_after: float | None
+    confidence: float | None  # share of it that changed on the passes that decided it
     detected_utc: datetime
     status_utc: datetime
     history: list[StatusChange]
@@ -480,6 +533,7 @@ def _provenance(event: db.Event) -> dict:
         "geometry": mapping(to_shape(event.geometry)),
         "ndvi_before": event.ndvi_before,
         "ndvi_after": event.ndvi_after,
+        "confidence": event.confidence,
         "detected_utc": event.detected_utc.isoformat(),
         "history": event.history,
         "items": event.items,
@@ -636,13 +690,24 @@ class LinkSent(BaseModel):
 
 
 @app.post("/auth/login", status_code=202)
-def login(body: Login, s: SessionDep) -> LinkSent:
+def login(body: Login, s: SessionDep, redis: RedisDep, request: Request) -> LinkSent:
     """Email a sign-in link. The answer is the same whether or not the address has an
     account, so it can't be used to find out who does."""
     email = accounts.normalize_email(body.email)
     if email is None:
         raise HTTPException(422, "that doesn't look like an email address")
     cfg = pipeline_config().accounts
+    try:
+        allowed = accounts.login_allowed(redis, email, request.client.host, cfg)
+    except RedisError as exc:  # no limit, no email: the form must not become a mail cannon
+        logger.warning("sign-in refused, rate limiter down: {!r}", exc)
+        raise HTTPException(503, "Sign-in is briefly unavailable. Try again shortly.") from exc
+    if not allowed:
+        raise HTTPException(
+            429,
+            f"Too many sign-in links asked for. Try again in {cfg.login_limit_minutes} minutes.",
+            headers={"Retry-After": str(cfg.login_limit_minutes * 60)},
+        )
     token = accounts.new_login_link(s, email, cfg)
     s.commit()
     link = f"{settings().api_url}/auth/callback?token={token}"
@@ -935,7 +1000,7 @@ def feedback_submit(token: str, s: SessionDep) -> HTMLResponse:
 
 
 @app.get("/health")
-def health(s: SessionDep, redis: Annotated[Redis, Depends(get_redis)], response: Response) -> dict:
+def health(s: SessionDep, redis: RedisDep, response: Response) -> dict:
     checks = {}
     try:
         s.execute(text("SELECT 1"))

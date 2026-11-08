@@ -1,0 +1,146 @@
+# Production: one VM, behind Caddy. Runbook: docs/deploy.md.
+#
+# Caddy is the only service with a published port. TiTiler reads any file it's asked for and
+# the API checks who owns what, so browsers reach tiles only through the API (ADR-013).
+# Rasters stay on this machine's disk and are mirrored nightly (ADR-014).
+name: orbitdiff
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options: { max-size: 10m, max-file: "5" }
+
+x-app: &app
+  <<: *logging
+  image: ${ORBITDIFF_REGISTRY:?see .env.example}/orbitdiff-app:${ORBITDIFF_VERSION:?see .env.example}
+  restart: unless-stopped
+  environment: &app-env
+    ORBITDIFF_DATABASE_URL: postgresql+psycopg://orbitdiff:${POSTGRES_PASSWORD:?see .env.example}@db:5432/orbitdiff
+    ORBITDIFF_REDIS_URL: redis://redis:6379/0
+    ORBITDIFF_TITILER_URL: http://titiler
+    ORBITDIFF_WEB_URL: https://${ORBITDIFF_DOMAIN:?see .env.example}
+    ORBITDIFF_API_URL: https://${ORBITDIFF_DOMAIN}/api
+    ORBITDIFF_CORS_ORIGINS: "[]"                       # one origin: the API is under /api
+    ORBITDIFF_SIGNING_KEY: ${ORBITDIFF_SIGNING_KEY:?see .env.example}
+    ORBITDIFF_ADMIN_EMAILS: ${ORBITDIFF_ADMIN_EMAILS:-[]}
+    ORBITDIFF_SMTP_HOST: ${ORBITDIFF_SMTP_HOST:?see .env.example}
+    ORBITDIFF_SMTP_PORT: ${ORBITDIFF_SMTP_PORT:-587}
+    ORBITDIFF_SMTP_STARTTLS: ${ORBITDIFF_SMTP_STARTTLS:-true}
+    ORBITDIFF_SMTP_USERNAME: ${ORBITDIFF_SMTP_USERNAME:-}
+    ORBITDIFF_SMTP_PASSWORD: ${ORBITDIFF_SMTP_PASSWORD:-}
+    ORBITDIFF_MAIL_FROM: ${ORBITDIFF_MAIL_FROM:?see .env.example}
+    ORBITDIFF_MLFLOW_TRACKING_URI: sqlite:////app/data/mlflow/mlflow.db
+  volumes: [./data:/app/data]
+  depends_on:
+    migrate: { condition: service_completed_successfully }
+    redis: { condition: service_started }
+
+services:
+  caddy:
+    <<: *logging
+    image: caddy:2.11.2-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443", "443:443/udp"]
+    environment:
+      ORBITDIFF_DOMAIN: ${ORBITDIFF_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data                 # its certificates: losing them means asking again
+      - caddy-config:/config
+    depends_on: [api, web]
+
+  migrate:                               # brings the schema up to date, then exits
+    <<: *app
+    command: alembic upgrade head
+    restart: "no"
+    depends_on:
+      db: { condition: service_healthy }
+
+  api:
+    <<: *app
+    # Only Caddy can reach it, and Caddy ignores a client's own X-Forwarded-For, so the
+    # sign-in limits count the real address.
+    command: uvicorn orbitdiff.api:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips '*'
+    volumes: [./data:/app/data, ../eval:/app/eval]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      retries: 5
+
+  worker:                                # backfills, alert emails, retraining candidates
+    <<: *app
+    image: ${ORBITDIFF_REGISTRY}/orbitdiff-worker:${ORBITDIFF_VERSION}
+    command: orbitdiff worker
+    volumes: [./data:/app/data, ../eval:/app/eval:ro]
+
+  scheduler:                             # queues an update for every watched area
+    <<: *app
+    command: orbitdiff scheduler
+
+  web:
+    <<: *logging
+    image: ${ORBITDIFF_REGISTRY}/orbitdiff-web:${ORBITDIFF_VERSION}
+    restart: unless-stopped
+
+  titiler:                               # renders map tiles from the composite COGs (ADR-007)
+    <<: *logging
+    image: ghcr.io/developmentseed/titiler:2.4.0
+    restart: unless-stopped
+    environment:
+      COLORMAP_DIRECTORY: /colormaps     # the NDVI ramp, from orbitdiff.render
+      WEB_CONCURRENCY: "2"
+    volumes:
+      - ./data/composites:/data/composites:ro
+      - ../docker/titiler/colormaps:/colormaps:ro
+
+  db:
+    <<: *logging
+    image: postgis/postgis:17-3.7        # amd64 only: choose an x86 machine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: orbitdiff
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: orbitdiff
+    volumes: [pg:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orbitdiff"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    <<: *logging
+    image: redis:8.6
+    restart: unless-stopped
+    volumes: [redis:/data]               # a lost queue would leave areas stuck as "queued"
+
+  backup:                                # nightly; see deploy/backup.sh
+    <<: *logging
+    image: ${ORBITDIFF_REGISTRY}/orbitdiff-backup:${ORBITDIFF_VERSION}
+    restart: unless-stopped
+    environment:
+      PGHOST: db
+      PGUSER: orbitdiff
+      PGDATABASE: orbitdiff
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      ORBITDIFF_BACKUP_KEEP_DAYS: ${ORBITDIFF_BACKUP_KEEP_DAYS:-14}
+      ORBITDIFF_BACKUP_BUCKET: ${ORBITDIFF_BACKUP_BUCKET:-}
+      RCLONE_CONFIG_BACKUP_TYPE: ${RCLONE_CONFIG_BACKUP_TYPE:-}
+      RCLONE_CONFIG_BACKUP_PROVIDER: ${RCLONE_CONFIG_BACKUP_PROVIDER:-}
+      RCLONE_CONFIG_BACKUP_ENDPOINT: ${RCLONE_CONFIG_BACKUP_ENDPOINT:-}
+      RCLONE_CONFIG_BACKUP_ACCESS_KEY_ID: ${RCLONE_CONFIG_BACKUP_ACCESS_KEY_ID:-}
+      RCLONE_CONFIG_BACKUP_SECRET_ACCESS_KEY: ${RCLONE_CONFIG_BACKUP_SECRET_ACCESS_KEY:-}
+    volumes:
+      - ./backups:/backups
+      - ./data:/data:ro
+    depends_on:
+      db: { condition: service_healthy }
+    healthcheck:                         # unhealthy once two days pass without a dump
+      test: ["CMD-SHELL", "find /backups -name 'orbitdiff-*.dump' -mtime -2 | grep -q ."]
+      interval: 1h
+      start_period: 30h
+
+volumes:
+  pg:
+  redis:
+  caddy-data:
+  caddy-config:

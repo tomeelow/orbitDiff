@@ -23,12 +23,24 @@ from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from orbitdiff import buildings, composites, cube, db, detection, masking, notify, render
+from orbitdiff import (
+    buildings,
+    catalog,
+    composites,
+    cube,
+    db,
+    detection,
+    masking,
+    notify,
+    render,
+    retraining,
+)
 from orbitdiff.aoi import AOIGrid, reproject
 from orbitdiff.config import PipelineConfig, pipeline_config, settings
 from orbitdiff.fetch import fetch_aoi
 
 QUEUE = "backfill"
+RETRAIN_QUEUE = "retrain"  # the worker takes it only when no backfill is waiting
 PROGRESS_EVERY = 10  # passes between progress writes
 MASK_BATCH = 64  # passes loaded at once when computing clear fractions
 UPSERT_ROWS = 1000  # rows per statement; Postgres allows 65,535 parameters
@@ -68,6 +80,44 @@ def enqueue_backfill(aoi_id: int) -> None:
     queue = Queue(QUEUE, connection=Redis.from_url(settings().redis_url))
     hours = pipeline_config().jobs.backfill_timeout_hours
     queue.enqueue(backfill, aoi_id, job_id=f"backfill-{aoi_id}", job_timeout=int(hours * 3600))
+
+
+def poll_retraining(enqueue: Callable[[], None] | None = None) -> bool:
+    """Queue a retraining candidate if one is due. Recorded first: a crash here must not
+    queue another every poll. Only a candidate: promoting it is a person's call."""
+    cfg, data_dir = pipeline_config(), settings().data_dir
+    with db.session() as s:
+        labels = retraining.due(s, cfg, data_dir, datetime.now(UTC))
+    if labels is None:
+        return False
+    buildings.write_candidate(data_dir, labels)
+    (enqueue or enqueue_retrain)()
+    logger.info("retraining: candidate queued with {} feedback labels", labels)
+    return True
+
+
+def enqueue_retrain() -> None:
+    queue = Queue(RETRAIN_QUEUE, connection=Redis.from_url(settings().redis_url))
+    hours = pipeline_config().jobs.retrain_timeout_hours
+    queue.enqueue(retrain, job_id="retrain", job_timeout=int(hours * 3600))
+
+
+def retrain() -> None:
+    """Train and register a candidate on OSCD and the feedback so far (Phase 10)."""
+    cfg, data_dir = pipeline_config(), settings().data_dir
+    with db.session() as s:
+        feedback = retraining.load_not_real(s, data_dir)
+    candidate = retraining.train_candidate(cfg.buildings, data_dir, feedback)
+    logger.info(
+        "retraining: registered version {} (not promoted), OSCD test F1 {:.3f}, {} labels "
+        "trained on, {} held out, held-out false alarms {} (champion {})",
+        candidate.version,
+        candidate.test.f1,
+        candidate.trained_on,
+        candidate.held_out,
+        candidate.false_alarms,
+        candidate.champion_false_alarms,
+    )
 
 
 def _set(aoi_id: int, **values: object) -> None:
@@ -115,15 +165,27 @@ def backfill(aoi_id: int, model: masking.CloudModel | None = None) -> None:
     run = _start_run(aoi_id)
     fallback = cfg.catalog.fallback.name
     from_fallback = _passes_from(aoi_id, fallback)
+    search = catalog.SearchLog()
     stats: dict[str, int] = {}
+
+    def searched() -> dict[str, int]:  # known even when the search itself sinks the run
+        return {"search_errors": len(search.errors), "search_fallbacks": len(search.fallbacks)}
+
     try:
         _set(aoi_id, stage="reading", progress_done=0, progress_total=0, error=None)
         fetched = fetch_aoi(
-            grid, start, datetime.now(UTC).date(), cfg, data_dir, on_progress=progress
+            grid,
+            start,
+            datetime.now(UTC).date(),
+            cfg,
+            data_dir,
+            on_progress=progress,
+            search_log=search,
         )
         stats = {
             "passes_read": fetched.full + fetched.scl_only + fetched.tile_cloud,
             "passes_failed": fetched.failed,
+            "read_retries": fetched.retried,
             "bytes_read": fetched.bytes_read,
         }
         _set(aoi_id, stage="masking")
@@ -140,8 +202,9 @@ def backfill(aoi_id: int, model: masking.CloudModel | None = None) -> None:
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
         _set(aoi_id, stage="failed", error=error)
-        _finish_run(run, "failed", error=error[:500], **stats)
+        _finish_run(run, "failed", error=error[:500], **stats, **searched())
         raise
+    stats |= searched()
     # After "ready": the archive is complete either way. A failed email is retried on the
     # next run; only an error in sending itself (the database, say) fails the run.
     try:
@@ -323,6 +386,7 @@ def sync_events(aoi_id: int, cfg: PipelineConfig, data_dir: Path) -> None:
                 "geometry": from_shape(geometry, srid=4326),
                 "ndvi_before": None if np.isnan(e.ndvi_before) else e.ndvi_before,
                 "ndvi_after": None if np.isnan(e.ndvi_after) else e.ndvi_after,
+                "confidence": e.confidence,
                 "detected_utc": _utc(e.detected),
                 "status_utc": _utc(e.history[-1][2]),
                 "history": [

@@ -56,15 +56,23 @@ def test_event_crops_frame_the_footprint_with_context_and_keep_pixels_square(gri
     assert 53 <= rows.min() <= 57 and 135 <= rows.max() <= 139
 
 
-def test_composite_tile_urls_are_versioned_and_keep_xyz_placeholders():
-    urls = tiles.composite_urls(7, date(2021, 7, 1), "abc123")
-    true_color = urlsplit(urls["true_color"])
-    assert true_color.path == "/cog/tiles/WebMercatorQuad/{z}/{x}/{y}.png"
+def test_titiler_urls_name_the_month_and_its_rendering():
+    true_color = urlsplit(tiles.tile_url(7, "2021-07", "true_color", 14, 3, 5))
+    assert true_color.path == "/cog/tiles/WebMercatorQuad/14/3/5.png"
     q = parse_qs(true_color.query)
     assert q["url"] == ["/data/composites/7/2021-07_display.tif"]
-    assert (q["bidx"], q["rescale"], q["v"]) == (["3", "2", "1"], ["0,3000"], ["abc123"])
-    ndvi = parse_qs(urlsplit(urls["ndvi"]).query)
+    assert (q["bidx"], q["rescale"]) == (["3", "2", "1"], ["0,3000"])
+    ndvi = parse_qs(urlsplit(tiles.tile_url(7, "2021-07", "ndvi", 14, 3, 5)).query)
     assert ndvi["expression"] == ["(b4-b3)/(b4+b3)"] and ndvi["colormap_name"] == ["orbitdiff_ndvi"]
-    point = urlsplit(urls["point"])
-    assert point.path == "/cog/point/{lon},{lat}"
+    point = urlsplit(tiles.point_url(7, "2021-07", 30.5, 50.25))
+    assert point.path == "/cog/point/30.5,50.25"
     assert parse_qs(point.query)["expression"] == ["(b4-b3)/(b4+b3);b5"]
+
+
+def test_the_browser_only_gets_versioned_paths_on_the_api():
+    paths = tiles.composite_paths(7, date(2021, 7, 1), "abc123")
+    assert paths == {
+        "true_color": "/aois/7/months/2021-07/tiles/true_color/{z}/{x}/{y}.png?v=abc123",
+        "ndvi": "/aois/7/months/2021-07/tiles/ndvi/{z}/{x}/{y}.png?v=abc123",
+        "point": "/aois/7/months/2021-07/point/{lon},{lat}?v=abc123",
+    }
