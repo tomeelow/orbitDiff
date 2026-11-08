@@ -13,7 +13,7 @@ import {
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
 import { TerraDraw, TerraDrawPolygonMode, ValidateNotSelfIntersecting } from "terra-draw";
 import { TerraDrawMapLibreGLAdapter } from "terra-draw-maplibre-gl-adapter";
-import type { ChangeEvent, LabelChange } from "./api";
+import { API_URL, type ChangeEvent, type LabelChange } from "./api";
 import type { Theme } from "./hooks";
 import { CATEGORY } from "./lib/changes";
 import type { Bounds, Polygon } from "./lib/geo";
@@ -50,6 +50,9 @@ export function createMap(
     attributionControl: { compact: true },
     dragRotate: false,
     pitchWithRotate: false,
+    // Imagery needs the session cookie, and only imagery gets it: not the basemap's host.
+    transformRequest: (url) =>
+      url.startsWith(API_URL) ? { url, credentials: "include" } : { url },
     ...options,
   });
 }

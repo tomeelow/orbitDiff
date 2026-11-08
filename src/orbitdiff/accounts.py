@@ -12,6 +12,7 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
 
+from redis import Redis
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
@@ -36,6 +37,26 @@ def normalize_email(email: str) -> str | None:
     if not local or "." not in domain or len(email) > MAX_EMAIL or any(c.isspace() for c in email):
         return None
     return email
+
+
+def _within_limit(redis: Redis, key: str, limit: int, window_s: int) -> bool:
+    """Count one more use of `key`; False once it has been used more than `limit` times in
+    the window, which starts at its first use. One transaction, so a key always expires."""
+    pipe = redis.pipeline()
+    pipe.incr(key)
+    pipe.expire(key, window_s, nx=True)
+    count, _ = pipe.execute()
+    return count <= limit
+
+
+def login_allowed(redis: Redis, email: str, client_ip: str, cfg: AccountsConfig) -> bool:
+    """Whether a sign-in link may be sent now, so the form can't be used to flood someone's
+    inbox or burn through the email provider. The same answer whether or not the address
+    has an account. Addresses are hashed: Redis holds no personal data."""
+    window_s = cfg.login_limit_minutes * 60
+    ip = _within_limit(redis, f"login:ip:{_hash(client_ip)}", cfg.login_per_ip, window_s)
+    to = _within_limit(redis, f"login:email:{_hash(email)}", cfg.login_per_email, window_s)
+    return ip and to
 
 
 def new_login_link(s: Session, email: str, cfg: AccountsConfig) -> str:

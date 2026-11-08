@@ -33,6 +33,7 @@ class FetchSummary:
     scl_only: int  # SCL read, AOI too cloudy for the bands
     tile_cloud: int  # skipped on tile cloud cover, nothing read
     failed: int  # every candidate failed in every round; retried next run
+    retried: int  # reads tried again after a pass failed, over all rounds
     bytes_read: int
     full_bytes: int  # what the same assets weigh as whole files
     seconds: float
@@ -55,11 +56,14 @@ def fetch_aoi(
     cfg: PipelineConfig,
     data_dir: Path,
     on_progress: Callable[[int, int], None] | None = None,
+    search_log: catalog.SearchLog | None = None,
 ) -> FetchSummary:
     t0 = time.perf_counter()
     catalogs = [cfg.catalog.primary, cfg.catalog.fallback]
     by_name = {c.name: c for c in catalogs}
-    items = catalog.search(catalogs, grid.geometry, start, end, cache_dir=data_dir / "stac")
+    items = catalog.search(
+        catalogs, grid.geometry, start, end, cache_dir=data_dir / "stac", log=search_log
+    )
     passes = catalog.group_passes(items, grid, primary=cfg.catalog.primary.name)
 
     path = cube.cube_path(data_dir, grid.aoi_id)
@@ -85,7 +89,7 @@ def fetch_aoi(
     bytes_read = full_bytes = 0
     batch: list[reading.PassRead] = []
     grid.mask  # noqa: B018 - rasterize once here, not concurrently in every worker
-    pending, settled, rounds = todo, 0, cfg.reading.retry_rounds
+    pending, settled, rounds, retried = todo, 0, cfg.reading.retry_rounds, 0
     with ThreadPoolExecutor(cfg.reading.workers) as pool:
         for attempt in range(rounds + 1):
             if attempt:
@@ -97,6 +101,7 @@ def fetch_aoi(
                     wait,
                 )
                 time.sleep(wait)
+                retried += len(pending)
             futures = {pool.submit(read, candidates): candidates for candidates in pending}
             pending = []
             for future in as_completed(futures):
@@ -134,6 +139,7 @@ def fetch_aoi(
         scl_only=counts["scl"],
         tile_cloud=counts["tile_cloud"],
         failed=counts["failed"],
+        retried=retried,
         bytes_read=bytes_read,
         full_bytes=full_bytes,
         seconds=time.perf_counter() - t0,

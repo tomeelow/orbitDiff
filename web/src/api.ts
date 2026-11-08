@@ -2,7 +2,11 @@
 
 import type { LonLat, Polygon } from "./lib/geo";
 
-export const API_URL: string = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+/** Absolute even when built with a path like "/api": MapLibre needs whole URLs. */
+export const API_URL: string = new URL(
+  import.meta.env.VITE_API_URL ?? "http://localhost:8000",
+  globalThis.location?.href,
+).href.replace(/\/$/, "");
 
 export type Stage =
   | "queued"
@@ -48,7 +52,7 @@ export interface Month {
   observed_frac: number;
   filled_frac: number;
   gap: boolean;
-  tiles: { true_color: string; ndvi: string; point: string };
+  tiles: { true_color: string; ndvi: string; point: string }; // absolute, with placeholders
 }
 
 export interface NdviPoint {
@@ -91,6 +95,7 @@ export interface ChangeEvent {
   geometry: Polygon | { type: "MultiPolygon"; coordinates: LonLat[][][] };
   ndvi_before: number | null;
   ndvi_after: number | null;
+  confidence: number | null; // share of it that changed on the passes that decided it
   detected_utc: string;
   status_utc: string;
   history: StatusChange[];
@@ -170,6 +175,9 @@ export interface AdminSummary {
     passes_read: number;
     passes_failed: number;
     fallback_passes: number;
+    read_retries: number;
+    search_errors: number;
+    search_fallbacks: number;
     bytes_read: number;
     median_run_minutes: number | null;
     emails_sent: number;
@@ -179,6 +187,19 @@ export interface AdminSummary {
     feedback: number;
   };
   failures: { aoi_id: number; finished_utc: string; error: string }[];
+  evaluation: {
+    eval_set: string; // a hash of the label files
+    verified: boolean; // false: these numbers are not a benchmark
+    scored_utc: string;
+    rows: {
+      method: string;
+      precision: number | null;
+      recall: number | null;
+      false_alerts_per_aoi_year: number | null;
+      median_delay_days: number | null;
+    }[];
+  } | null;
+  retraining: { labels: number; queued_utc: string } | null;
 }
 
 export interface Limits {
@@ -231,7 +252,15 @@ export const api = {
     request<AoiSummary>("/aois", json("POST", { name, geometry })),
   progress: (id: number) => request<Progress>(`/aois/${id}/progress`),
   backfill: (id: number) => request<Progress>(`/aois/${id}/backfill`, { method: "POST" }),
-  timeline: (id: number) => request<Month[]>(`/aois/${id}/timeline`),
+  timeline: async (id: number) =>
+    (await request<Month[]>(`/aois/${id}/timeline`)).map((month) => ({
+      ...month,
+      tiles: {
+        true_color: `${API_URL}${month.tiles.true_color}`,
+        ndvi: `${API_URL}${month.tiles.ndvi}`,
+        point: `${API_URL}${month.tiles.point}`,
+      },
+    })),
   ndvi: (id: number) => request<NdviPoint[]>(`/aois/${id}/ndvi`),
   scenes: (id: number, month: string) => request<Scene[]>(`/aois/${id}/scenes?month=${month}`),
   events: (id: number) => request<ChangeEvent[]>(`/aois/${id}/events`),
@@ -266,7 +295,7 @@ export async function pointReadout(
   signal: AbortSignal,
 ): Promise<{ ndvi: number | null; filled: boolean } | null> {
   const url = template.replace("{lon}", lon.toFixed(6)).replace("{lat}", lat.toFixed(6));
-  const response = await fetch(url, { signal });
+  const response = await fetch(url, { signal, credentials: "include" });
   if (!response.ok) return null; // outside the composite
   const { values } = (await response.json()) as { values: (number | null)[] };
   const [ndvi, filled] = values;

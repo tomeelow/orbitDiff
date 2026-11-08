@@ -110,6 +110,7 @@ def test_fetch_retries_a_pass_that_failed_and_leaves_one_that_keeps_failing(
 
     assert (summary.full, summary.failed) == (1, 1)
     assert attempts == {"a": 2, "b": 3}  # one try and two retry rounds
+    assert summary.retried == 3  # both in the first retry round, then "b"
     assert progress[-1] == (2, 2)  # both settled, one of them as failed
     assert list(cube.load(cube.cube_path(tmp_path, grid.aoi_id))["item_id"].values) == ["a"]
 

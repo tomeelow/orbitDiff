@@ -13,6 +13,7 @@ Needs the `ml` group (PyTorch).
 """
 
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -189,16 +190,37 @@ def score(predictor: Predictor, city: oscd.City, threshold: float) -> Scores:
     )
 
 
+def hard_negative(
+    before: np.ndarray, after: np.ndarray, footprint: np.ndarray, patch_px: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """A "Not a real change" as training data: the pair (2 x band, y, x), standardised over
+    the whole area as it is when served, cropped around the footprint to at least a training
+    patch; and labels (y, x), 0 in the footprint and NaN everywhere else, since nobody said
+    anything about the rest. An area smaller than a patch is padded, as it is when served."""
+    b, a, seen = standardize(before, after)
+    labels = np.where(footprint & seen, 0.0, np.nan).astype(np.float32)
+    window = []
+    for pixels, size in zip(np.nonzero(footprint), footprint.shape, strict=True):
+        low, high = int(pixels.min()), int(pixels.max()) + 1
+        length = max(high - low, patch_px)
+        start = max(min(low - (length - (high - low)) // 2, size - length), 0)
+        window.append(slice(start, start + length))
+    pair, labels = np.concatenate([b, a])[(slice(None), *window)], labels[tuple(window)]
+    short = tuple((0, max(patch_px - n, 0)) for n in labels.shape)
+    return np.pad(pair, ((0, 0), *short)), np.pad(labels, short, constant_values=np.nan)
+
+
 def _patches(
     pairs_in: list[np.ndarray],
     labels_in: list[np.ndarray],
+    batch: int,
     cfg: BuildingsConfig,
     rng: np.random.Generator,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """A batch of random crops, rotated and flipped, from images weighted by their size."""
     sizes = np.array([label.size for label in labels_in], dtype=float)
     pairs, labels = [], []
-    for i in rng.choice(len(pairs_in), size=cfg.batch, p=sizes / sizes.sum()):
+    for i in rng.choice(len(pairs_in), size=batch, p=sizes / sizes.sum()):
         height, width = labels_in[i].shape
         y, x = rng.integers(height - cfg.patch_px + 1), rng.integers(width - cfg.patch_px + 1)
         window = np.s_[y : y + cfg.patch_px, x : x + cfg.patch_px]
@@ -212,6 +234,17 @@ def _patches(
     return torch.from_numpy(np.stack(pairs)), torch.from_numpy(np.stack(labels)).float()
 
 
+def patch_loss(logits: torch.Tensor, labels: torch.Tensor, pos_weight: float) -> torch.Tensor:
+    """Binary cross-entropy over each patch's labelled pixels (NaN: nobody said), then
+    averaged over patches, so a patch weighs the same however few pixels it has labels for."""
+    labelled = ~labels.isnan()
+    per_pixel = functional.binary_cross_entropy_with_logits(
+        logits, labels.nan_to_num(), pos_weight=torch.tensor(pos_weight), reduction="none"
+    )
+    per_patch = (per_pixel * labelled).sum(dim=(1, 2)) / labelled.sum(dim=(1, 2)).clamp(min=1)
+    return per_patch.mean()
+
+
 @dataclass
 class Trained:
     predictor: Predictor
@@ -223,9 +256,14 @@ class Trained:
     history: list[tuple[int, float, float]]  # step, training loss, validation F1
 
 
-def train(cfg: BuildingsConfig, folder: Path) -> Trained:
+def train(
+    cfg: BuildingsConfig,
+    folder: Path,
+    negatives: Sequence[tuple[np.ndarray, np.ndarray]] = (),
+) -> Trained:
     """Train on OSCD's train cities less `val_cities`, keep the step that scores best on
-    the validation cities, and score that on the test cities, which nothing else sees."""
+    the validation cities, and score that on the test cities, which nothing else sees.
+    `negatives` (from `hard_negative`) take `feedback_per_batch` of each batch's crops."""
     t0 = time.perf_counter()
     torch.manual_seed(cfg.seed)
     torch.use_deterministic_algorithms(True)
@@ -246,15 +284,19 @@ def train(cfg: BuildingsConfig, folder: Path) -> Trained:
     model = SiamDiff()
     optimiser = torch.optim.Adam(model.parameters(), lr=cfg.learning_rate, weight_decay=1e-4)
     schedule = torch.optim.lr_scheduler.CosineAnnealingLR(optimiser, cfg.steps)
-    loss_fn = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(pos_weight))
     predictor = Predictor(model, "candidate")
+    negative_pairs, negative_labels = [p for p, _ in negatives], [lab for _, lab in negatives]
+    from_oscd = cfg.batch - cfg.feedback_per_batch if negatives else cfg.batch
 
     best: tuple[float, int, dict] = (-1.0, 0, {})
     history, losses = [], []
     for step in range(1, cfg.steps + 1):
         model.train()
-        pairs, labels = _patches(train_pairs, train_labels, cfg, rng)
-        loss = loss_fn(model(pairs), labels)
+        pairs, labels = _patches(train_pairs, train_labels, from_oscd, cfg, rng)
+        if negatives:
+            extra = _patches(negative_pairs, negative_labels, cfg.feedback_per_batch, cfg, rng)
+            pairs, labels = torch.cat([pairs, extra[0]]), torch.cat([labels, extra[1]])
+        loss = patch_loss(model(pairs), labels, pos_weight)
         optimiser.zero_grad()
         loss.backward()
         optimiser.step()

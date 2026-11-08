@@ -125,6 +125,26 @@ def test_no_catalog_answering_is_an_error(monkeypatch, aoi_polygon):
         catalog.search_year([EARTH_SEARCH, PLANETARY], aoi_polygon, 2021)
 
 
+def test_a_search_log_records_what_the_catalogs_did(monkeypatch, make_scene, aoi_polygon):
+    def primary_down(cat, aoi, year):
+        if cat is EARTH_SEARCH:
+            raise ConnectionError("down")
+        return [make_scene()]
+
+    monkeypatch.setattr(catalog, "_search_year", primary_down)
+    log = catalog.SearchLog()
+    assert catalog.search_year([EARTH_SEARCH, PLANETARY], aoi_polygon, 2021, log=log)
+    assert log.errors == [f"{EARTH_SEARCH.name} 2021"]
+    assert log.fallbacks == [f"{PLANETARY.name} 2021"]
+
+
+def test_a_search_log_stays_empty_when_the_primary_answers(monkeypatch, make_scene, aoi_polygon):
+    monkeypatch.setattr(catalog, "_search_year", lambda cat, aoi, year: [make_scene()])
+    log = catalog.SearchLog()
+    catalog.search_year([EARTH_SEARCH, PLANETARY], aoi_polygon, 2021, log=log)
+    assert log == catalog.SearchLog()
+
+
 def test_planetary_computer_hrefs_are_signed_and_tokens_reused(monkeypatch):
     fetched = []
 

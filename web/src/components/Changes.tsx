@@ -2,7 +2,7 @@ import { useState } from "react";
 import { type ChangeEvent, eventImageUrl } from "../api";
 import type { Load } from "../hooks";
 import { alertText, CATEGORY, historyLine, STATUS } from "../lib/changes";
-import { formatArea } from "../lib/format";
+import { formatArea, formatPercent } from "../lib/format";
 import { monthKey, monthLabel } from "../lib/months";
 import { Segmented } from "./ui";
 
@@ -163,6 +163,12 @@ function ChangeRow({
               <li key={`${h.status}-${h.at}`}>{historyLine(h, i === 0)}</li>
             ))}
           </ol>
+          {event.confidence !== null && (
+            <p className="muted small">
+              Confidence <span className="fig">{formatPercent(event.confidence)}</span>: how much of
+              it changed on the clear passes that decided it.
+            </p>
+          )}
           <p className="muted small">
             {monthLabel(monthKey(event.month))} compared with{" "}
             {monthLabel(monthKey(event.reference_month))}, from{" "}

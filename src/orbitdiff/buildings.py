@@ -18,6 +18,7 @@ from pathlib import Path
 import numpy as np
 
 CHAMPION = "champion"  # the file stem here, and the alias in the MLflow registry
+CANDIDATE = "candidate"  # the file stem of the latest retraining candidate's record
 
 
 def folder(data_dir: Path) -> Path:
@@ -73,3 +74,18 @@ def write_champion(data_dir: Path, registered_model: str, version: int, run_id: 
     partial.write_text(json.dumps(info, indent=2) + "\n")
     partial.replace(path)  # a worker never reads half a file
     return path
+
+
+def candidate_info(data_dir: Path) -> dict | None:
+    """The latest retraining candidate queued: the feedback count it started from, and when."""
+    path = folder(data_dir) / f"{CANDIDATE}.json"
+    return json.loads(path.read_text()) if path.exists() else None
+
+
+def write_candidate(data_dir: Path, labels: int) -> None:
+    path = folder(data_dir) / f"{CANDIDATE}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    info = {"labels": labels, "queued_utc": datetime.now(UTC).isoformat(timespec="seconds")}
+    partial = path.with_suffix(".part")
+    partial.write_text(json.dumps(info, indent=2) + "\n")
+    partial.replace(path)

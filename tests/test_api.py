@@ -4,22 +4,27 @@ Runs when ORBITDIFF_TEST_DATABASE_URL points at a database these tests may wipe 
 it; see .env.example). Imagery comes from local files, as everywhere else.
 """
 
+import json
 import os
+from collections import Counter
 from datetime import UTC, datetime, timedelta
+from urllib.error import URLError
 from urllib.parse import parse_qs, urlsplit
 
 import numpy as np
 import pytest
+import rasterio
 from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from fastapi.testclient import TestClient
 from rasterio.io import MemoryFile
+from redis.exceptions import ConnectionError as RedisConnectionError
 from shapely.geometry import box, mapping
 from sqlalchemy import create_engine, func, select, text
 
-from orbitdiff import accounts, api, catalog, db, detection, jobs, mail
+from orbitdiff import accounts, api, catalog, composites, db, detection, jobs, mail, tiles
 from orbitdiff.aoi import make_grid
 from orbitdiff.config import REPO_ROOT, pipeline_config, settings
 
@@ -56,13 +61,40 @@ def data_dir(migrated, tmp_path, monkeypatch):
 
 
 class FakeRedis:
+    """As much of Redis as the API uses: counters, read in one transaction."""
+
     def __init__(self, up: bool = True) -> None:
         self.up = up
+        self.counts: Counter[str] = Counter()
+        self.expiring: dict[str, int] = {}
+        self.queued: list[tuple] = []
 
     def ping(self) -> bool:
         if not self.up:
-            raise ConnectionError("down")
+            raise RedisConnectionError("down")
         return True
+
+    def pipeline(self) -> "FakeRedis":
+        return self
+
+    def incr(self, key: str) -> None:
+        self.queued.append(("incr", key))
+
+    def expire(self, key: str, seconds: int, nx: bool) -> None:
+        self.queued.append(("expire", key, seconds, nx))
+
+    def execute(self) -> list:
+        self.ping()
+        results: list = []
+        for name, key, *rest in self.queued:
+            if name == "incr":
+                self.counts[key] += 1
+                results.append(self.counts[key])
+            else:
+                self.expiring.setdefault(key, rest[0])
+                results.append(True)
+        self.queued.clear()
+        return results
 
 
 @pytest.fixture
@@ -85,9 +117,11 @@ def sign_in(client, email: str) -> None:
 def client(data_dir, outbox):
     queued: list[int] = []
     api.app.dependency_overrides[api.get_enqueue] = lambda: queued.append
-    api.app.dependency_overrides[api.get_redis] = FakeRedis
+    limiter = FakeRedis()
+    api.app.dependency_overrides[api.get_redis] = lambda: limiter
     with TestClient(api.app) as c:
         c.queued = queued
+        c.limiter = limiter
         c.outbox = outbox
         sign_in(c, "owner@example.com")
         yield c
@@ -188,8 +222,7 @@ def test_backfill_end_to_end(client, aoi_polygon, make_scene, monkeypatch):
         ("2021-08-01", 1, 1, False),
         ("2021-09-01", 3, 1, False),
     ]
-    tile_query = parse_qs(urlsplit(timeline[1]["tiles"]["true_color"]).query)
-    assert tile_query["url"] == [f"/data/composites/{aoi_id}/2021-09_display.tif"]
+    assert timeline[1]["tiles"]["true_color"].startswith(f"/aois/{aoi_id}/months/2021-09/tiles/")
     ndvi = client.get(f"/aois/{aoi_id}/ndvi").json()
     assert [p["ndvi"] for p in ndvi] == [0.0, 0.0]  # every test band reads 1500
 
@@ -360,6 +393,7 @@ def test_a_recomputed_event_keeps_its_own_row_not_a_stale_neighbour(
 
 
 def test_sign_in_by_emailed_link(data_dir, outbox):
+    api.app.dependency_overrides[api.get_redis] = FakeRedis
     with TestClient(api.app) as c:
         assert c.get("/auth/me").status_code == 401
         assert c.post("/auth/login", json={"email": "not an address"}).status_code == 422
@@ -378,6 +412,7 @@ def test_sign_in_by_emailed_link(data_dir, outbox):
         assert c.post("/auth/logout").status_code == 204
         assert c.get("/auth/me").status_code == 401
         assert c.get("/auth/callback", params={"token": "made-up"}).status_code == 400
+    api.app.dependency_overrides.clear()
 
 
 def test_an_aoi_is_only_ever_seen_by_its_owner(client, aoi_polygon):
@@ -401,6 +436,85 @@ def test_an_aoi_is_only_ever_seen_by_its_owner(client, aoi_polygon):
     assert client.get("/aois").json() == []
     assert all(client.get(p).status_code == 404 for p in paths)  # not 403: ids reveal nothing
     assert client.post(f"/aois/{aoi_id}/backfill").status_code == 404
+
+
+def test_sign_in_links_are_limited_per_address(client):
+    limit = pipeline_config().accounts.login_per_email
+    for _ in range(limit):
+        assert client.post("/auth/login", json={"email": "a@example.com"}).status_code == 202
+    assert len(client.outbox) == limit
+
+    refused = client.post("/auth/login", json={"email": "A@example.com "})  # the same address
+    assert refused.status_code == 429 and refused.headers["retry-after"] == "3600"
+    assert len(client.outbox) == limit  # nothing more was sent
+    assert not any("a@example.com" in key for key in client.limiter.counts)  # hashed
+    assert set(client.limiter.expiring.values()) == {3600}
+
+    assert client.post("/auth/login", json={"email": "b@example.com"}).status_code == 202
+
+
+def test_sign_in_links_are_limited_per_client(client):
+    limit = pipeline_config().accounts.login_per_ip
+    for i in range(limit):
+        assert client.post("/auth/login", json={"email": f"{i}@example.com"}).status_code == 202
+    assert client.post("/auth/login", json={"email": "next@example.com"}).status_code == 429
+
+
+def test_sign_in_stops_rather_than_sending_unlimited_when_redis_is_down(client):
+    client.limiter.up = False
+    assert client.post("/auth/login", json={"email": "a@example.com"}).status_code == 503
+    assert client.outbox == []
+
+
+def test_map_tiles_come_through_the_api_for_the_owner_only(client, aoi_polygon, monkeypatch):
+    aoi_id = create(client, aoi_polygon).json()["id"]
+    asked: list[str] = []
+
+    def titiler(url):
+        asked.append(url)
+        return 200, b"tile", "image/png"
+
+    monkeypatch.setattr(tiles, "fetch", titiler)
+
+    # A caller can't choose the file: `url` is built on the server.
+    r = client.get(
+        f"/aois/{aoi_id}/months/2021-09/tiles/ndvi/14/3/5.png",
+        params={"url": "/data/composites/999/2021-09_display.tif", "v": "abc"},
+    )
+    assert (r.status_code, r.content, r.headers["content-type"]) == (200, b"tile", "image/png")
+    assert r.headers["cache-control"].startswith("private")
+    assert parse_qs(urlsplit(asked[0]).query)["url"] == [
+        f"/data/composites/{aoi_id}/2021-09_display.tif"
+    ]
+    point = client.get(f"/aois/{aoi_id}/months/2021-09/point/30.5,50.25")
+    assert point.status_code == 200 and urlsplit(asked[1]).path == "/cog/point/30.5,50.25"
+
+    assert client.get(f"/aois/{aoi_id}/months/2021-13/point/30.5,50.25").status_code == 422
+    assert client.get(f"/aois/{aoi_id}/months/2021-09/tiles/rgb/1/1/1.png").status_code == 422
+
+    asked.clear()
+    path = f"/aois/{aoi_id}/months/2021-09/tiles/ndvi/14/3/5.png"
+    sign_in(client, "someone.else@example.com")
+    assert client.get(path).status_code == 404
+    client.cookies.clear()
+    assert client.get(path).status_code == 401
+    assert asked == []  # neither got as far as TiTiler
+
+
+def test_a_tile_server_problem_is_a_clean_error(client, aoi_polygon, monkeypatch):
+    aoi_id = create(client, aoi_polygon).json()["id"]
+    path = f"/aois/{aoi_id}/months/2021-09/tiles/ndvi/14/3/5.png"
+
+    monkeypatch.setattr(tiles, "fetch", lambda url: (404, b"", ""))
+    assert client.get(path).status_code == 404
+    monkeypatch.setattr(tiles, "fetch", lambda url: (500, b"", ""))
+    assert client.get(path).status_code == 502
+
+    def unreachable(url):
+        raise URLError("connection refused")
+
+    monkeypatch.setattr(tiles, "fetch", unreachable)
+    assert client.get(path).status_code == 502
 
 
 def test_assign_aois_gives_ownerless_aois_an_owner(client, aoi_polygon, capsys):
@@ -556,6 +670,97 @@ def test_an_event_alerts_once_and_follows_up_once(client, detected):
     ]
 
 
+def clearing_at(grid, top: int, month: str = "2021-05") -> detection.Event:
+    return make_event(grid, slice(top, top + 5), month, ("pending", "S2A_new", f"{month}-05"))
+
+
+def test_many_changes_at_once_arrive_as_a_digest_and_still_only_once(client, detected):
+    from orbitdiff import notify
+
+    aoi_id, grid, sync = detected
+    client.put(f"/aois/{aoi_id}/alert-rule", json=RULE | {"enabled": True})
+    watch_from(aoi_id, "2021-05-01")
+    alerts = pipeline_config().alerts
+    changes = alerts.digest_size + 2
+    sync(*(clearing_at(grid, 10 * i) for i in range(changes)))
+
+    assert notify.notify(aoi_id) == changes
+    first, second = client.outbox
+    assert first["Subject"] == f"{alerts.digest_size} changes in Kyiv west"
+    assert second["Subject"] == "2 changes in Kyiv west"
+    text = first.get_body(("plain",)).get_content()
+    assert text.count("/feedback/") == alerts.digest_size  # each change can be disputed
+    assert text.count("Possible vegetation loss") >= alerts.digest_size
+    assert notifications(aoi_id) == [("alert", "pending", "sent", 1)] * changes
+    assert notify.notify(aoi_id) == 0 and len(client.outbox) == 2  # a retry sends nothing
+
+
+def test_a_few_changes_at_once_stay_separate_emails(client, detected):
+    from orbitdiff import notify
+
+    aoi_id, grid, sync = detected
+    client.put(f"/aois/{aoi_id}/alert-rule", json=RULE | {"enabled": True})
+    watch_from(aoi_id, "2021-05-01")
+    sync(*(clearing_at(grid, 10 * i) for i in range(pipeline_config().alerts.digest_over)))
+    assert notify.notify(aoi_id) == len(client.outbox) == pipeline_config().alerts.digest_over
+
+
+def test_a_digest_that_fails_to_send_is_retried_for_every_change_in_it(
+    client, detected, monkeypatch
+):
+    from orbitdiff import notify
+
+    aoi_id, grid, sync = detected
+    client.put(f"/aois/{aoi_id}/alert-rule", json=RULE | {"enabled": True})
+    watch_from(aoi_id, "2021-05-01")
+    changes = pipeline_config().alerts.digest_over + 1
+    sync(*(clearing_at(grid, 10 * i) for i in range(changes)))
+    sent = client.outbox
+
+    def down(message):
+        raise ConnectionRefusedError("smtp down")
+
+    monkeypatch.setattr(mail, "send", down)
+    assert notify.notify(aoi_id) == 0
+    assert notifications(aoi_id) == [("alert", "pending", "failed", 1)] * changes
+
+    monkeypatch.setattr(mail, "send", sent.append)
+    assert notify.notify(aoi_id) == changes and len(sent) == 1
+    assert notifications(aoi_id) == [("alert", "pending", "sent", 2)] * changes
+
+
+def test_a_seasonal_change_someone_asked_to_hear_about_is_not_called_confirmed(client, detected):
+    from orbitdiff import notify
+
+    aoi_id, grid, sync = detected
+    rule = RULE | {"enabled": True, "skip_seasonal": False}
+    client.put(f"/aois/{aoi_id}/alert-rule", json=rule)
+    watch_from(aoi_id, "2021-05-01")
+    seen = ("seasonal", "looked like this in 2020-05", "2021-05-05")
+    sync(make_event(grid, slice(10, 20), "2021-05", seen))
+    notify.notify(aoi_id)
+    (email,) = client.outbox
+    assert email["Subject"] == "Seasonal: vegetation loss in Kyiv west (2.0 ha)"
+    text = email.get_body(("plain",)).get_content()
+    assert "looks seasonal (looked like this in May 2020)" in text
+    assert "seen on 1 clear pass" in text and "confirmed" not in text
+
+
+def test_every_alert_says_how_sure_it_is(client, detected):
+    from orbitdiff import notify
+
+    aoi_id, grid, sync = detected
+    client.put(f"/aois/{aoi_id}/alert-rule", json=RULE | {"enabled": True})
+    watch_from(aoi_id, "2021-05-01")
+    event = clearing_at(grid, 10)
+    event.shares = [0.9, 0.7]
+    sync(event)
+    assert client.get(f"/aois/{aoi_id}/events").json()[0]["confidence"] == 0.8
+    notify.notify(aoi_id)
+    text = client.outbox[0].get_body(("plain",)).get_content()
+    assert "Confidence: 80% of it changed on the clear passes that decided it" in text
+
+
 def test_a_failed_send_is_retried_then_given_up(client, detected, monkeypatch):
     from orbitdiff import notify
 
@@ -656,6 +861,9 @@ def test_the_admin_view_measures_precision_and_health_for_admins_only(
                     passes_read=3,
                     passes_failed=1,
                     fallback_passes=2,
+                    read_retries=4,
+                    search_errors=1,
+                    search_fallbacks=1,
                     bytes_read=1000,
                     emails_sent=0,
                 ),
@@ -673,6 +881,11 @@ def test_the_admin_view_measures_precision_and_health_for_admins_only(
     assert row["flagged"] is False  # under min_alerts: too few to say
     health = summary["health"]
     assert (health["runs"], health["failed_runs"], health["fallback_passes"]) == (1, 1, 2)
+    assert (health["read_retries"], health["search_errors"], health["search_fallbacks"]) == (
+        4,
+        1,
+        1,
+    )
     assert health["median_run_minutes"] == pytest.approx(10, abs=0.1)
     assert (health["emails_sent"], health["emails_stuck"], health["feedback"]) == (2, 0, 1)
     assert health["median_alert_hours"] > 24 * 365  # passes from 2021, sent today
@@ -688,6 +901,171 @@ def test_the_admin_view_measures_precision_and_health_for_admins_only(
     with db.session() as s:
         (flagged,) = monitoring.summary(s, strict, datetime.now(UTC)).precision
     assert flagged.flagged
+
+
+def test_the_admin_view_shows_the_latest_evaluation_and_whether_to_trust_it(
+    client, monkeypatch, tmp_path
+):
+    from orbitdiff import evaluation
+
+    monkeypatch.setattr(settings(), "admin_emails", ["owner@example.com"])
+    monkeypatch.setattr(settings(), "data_dir", tmp_path)
+    assert client.get("/admin/summary").json()["evaluation"] is None
+
+    scores = evaluation.Scores(alerts=4, true_alerts=3, labels=4, found=3)
+    report = evaluation.Report(scores, {}, {})
+    evaluation.save_scored({"production": report}, "abc123", False, tmp_path)
+    scored = client.get("/admin/summary").json()["evaluation"]
+    assert (scored["eval_set"], scored["verified"]) == ("abc123", False)
+    (row,) = scored["rows"]
+    assert (row["method"], row["precision"], row["recall"]) == ("production", 0.75, 0.75)
+
+
+def write_composite(data_dir, aoi_id: int, month: str, grid) -> None:
+    folder = composites.composite_dir(data_dir, str(aoi_id))
+    folder.mkdir(parents=True, exist_ok=True)
+    data = np.random.default_rng(int(month[:4])).integers(500, 3000, (6, grid.height, grid.width))
+    profile = {"driver": "GTiff", "width": grid.width, "height": grid.height, "count": 6}
+    with rasterio.open(folder / f"{month}.tif", "w", dtype="uint16", **profile) as dst:
+        dst.write(data.astype("uint16"))
+
+
+@pytest.fixture
+def an_empty_eval_set(monkeypatch, tmp_path):
+    from orbitdiff import evaluation
+
+    folder = tmp_path / "eval"
+    folder.mkdir()
+    monkeypatch.setattr(evaluation, "EVAL_DIR", folder)
+    return folder
+
+
+def test_not_a_real_change_trains_on_its_footprint_only(client, detected, an_empty_eval_set):
+    from orbitdiff import retraining
+
+    aoi_id, grid, sync = detected
+    sync(make_event(grid, slice(10, 20), "2021-05", ("pending", "S2A_new", "2021-05-05")))
+    (event,) = client.get(f"/aois/{aoi_id}/events").json()
+    client.post(f"/aois/{aoi_id}/events/{event['id']}/feedback")
+    data_dir = settings().data_dir
+    for month in ("2020-05", "2021-05"):
+        write_composite(data_dir, aoi_id, month, grid)
+
+    with db.session() as s:
+        (item,) = retraining.load_not_real(s, data_dir)
+
+    assert (item.event_id, item.aoi_id) == (event["id"], aoi_id)
+    assert item.before.shape == (4, grid.height, grid.width)
+    assert not np.array_equal(item.before, item.after)  # the two months, not one twice
+    expected = np.zeros((grid.height, grid.width), bool)
+    expected[10:20, 10:30] = True
+    np.testing.assert_array_equal(item.footprint, expected)
+
+
+def test_feedback_without_composites_is_skipped(client, detected, an_empty_eval_set):
+    from orbitdiff import retraining
+
+    aoi_id, grid, sync = detected
+    sync(make_event(grid, slice(10, 20), "2021-05", ("pending", "S2A_new", "2021-05-05")))
+    (event,) = client.get(f"/aois/{aoi_id}/events").json()
+    client.post(f"/aois/{aoi_id}/events/{event['id']}/feedback")
+    with db.session() as s:
+        assert retraining.load_not_real(s, settings().data_dir) == []
+
+
+def test_an_area_in_the_evaluation_set_is_never_trained_on(
+    client, detected, aoi_polygon, an_empty_eval_set
+):
+    from orbitdiff import retraining
+
+    aoi_id, grid, sync = detected
+    sync(make_event(grid, slice(10, 20), "2021-05", ("pending", "S2A_new", "2021-05-05")))
+    (event,) = client.get(f"/aois/{aoi_id}/events").json()
+    client.post(f"/aois/{aoi_id}/events/{event['id']}/feedback")
+    data_dir = settings().data_dir
+    for month in ("2020-05", "2021-05"):
+        write_composite(data_dir, aoi_id, month, grid)
+    area = {
+        "type": "Feature",
+        "properties": {
+            "role": "aoi",
+            "first_month": "2019-01",
+            "last_month": "2023-12",
+        },
+        "geometry": mapping(aoi_polygon.buffer(-0.001)),
+    }
+    (an_empty_eval_set / "overlapping.geojson").write_text(
+        json.dumps({"type": "FeatureCollection", "features": [area]})
+    )
+    with db.session() as s:
+        assert retraining.load_not_real(s, data_dir) == []
+
+
+def test_training_refuses_to_run_blind_to_the_evaluation_set(data_dir, monkeypatch):
+    from orbitdiff import evaluation, retraining
+
+    monkeypatch.setattr(evaluation, "EVAL_DIR", data_dir / "not-here")
+    with db.session() as s, pytest.raises(RuntimeError, match="evaluation set"):
+        retraining.load_not_real(s, data_dir)
+
+
+def buildings_flagged(client, detected, monkeypatch, labels: int, version: str):
+    """Sent building alerts under `version`, `labels` of them marked not real."""
+    from orbitdiff import notify
+
+    aoi_id, grid, sync = detected
+    client.put(f"/aois/{aoi_id}/alert-rule", json=RULE | {"enabled": True})
+    watch_from(aoi_id, "2021-05-01")
+    events = [
+        make_event(grid, slice(i, i + 10), "2021-05", ("pending", f"S2A_{i}", "2021-05-05"))
+        for i in range(0, 12 * labels, 12)
+    ]
+    for event in events:
+        event.category = "buildings_roads"
+    sync(*events)
+    with db.session() as s:
+        for event in s.scalars(select(db.Event)):
+            event.method_version = version
+    assert notify.notify(aoi_id) == labels
+    for event in client.get(f"/aois/{aoi_id}/events").json():
+        client.post(f"/aois/{aoi_id}/events/{event['id']}/feedback")
+    cfg = pipeline_config()
+    strict = cfg.model_copy(
+        update={
+            "monitoring": cfg.monitoring.model_copy(
+                update={"min_alerts": 2, "retrain_min_new_labels": 2}
+            )
+        }
+    )
+    monkeypatch.setattr(jobs, "pipeline_config", lambda: strict)
+
+
+def test_a_flagged_building_model_queues_one_candidate_until_there_is_more_to_learn(
+    client, detected, monkeypatch
+):
+    from orbitdiff import buildings
+
+    buildings_flagged(client, detected, monkeypatch, 3, "production-1a2b+orbitdiff_buildings/1")
+    data_dir = settings().data_dir
+    queued: list[int] = []
+
+    assert jobs.poll_retraining(lambda: queued.append(1)) is False  # no champion: nothing runs
+    buildings.write_champion(data_dir, "orbitdiff_buildings", 1, "run")
+    assert jobs.poll_retraining(lambda: queued.append(1)) is True
+    assert jobs.poll_retraining(lambda: queued.append(1)) is False  # no new labels since
+    assert len(queued) == 1
+    assert buildings.candidate_info(data_dir)["labels"] == 3
+    assert buildings.champion_info(data_dir)["version"] == 1  # the champion is untouched
+    monkeypatch.setattr(settings(), "admin_emails", ["owner@example.com"])
+    assert client.get("/admin/summary").json()["retraining"]["labels"] == 3
+
+
+def test_rules_going_wrong_is_not_a_reason_to_retrain_the_model(client, detected, monkeypatch):
+    from orbitdiff import buildings
+
+    buildings_flagged(client, detected, monkeypatch, 3, "production-1a2b3c4d")  # no model in it
+    buildings.write_champion(settings().data_dir, "orbitdiff_buildings", 1, "run")
+    assert jobs.poll_retraining(lambda: pytest.fail("queued")) is False
 
 
 def test_labels_are_saved_to_eval_for_admins_only(client, aoi_polygon, monkeypatch, tmp_path):

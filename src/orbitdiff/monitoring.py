@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
-from orbitdiff import buildings, db, detection
+from orbitdiff import buildings, db, detection, evaluation
 from orbitdiff.config import PipelineConfig, settings
 
 STUCK_AFTER = timedelta(hours=1)  # a claim this old never finished: its email may be lost
@@ -39,6 +39,9 @@ class Health(BaseModel):
     passes_read: int
     passes_failed: int  # left for the next run to retry
     fallback_passes: int  # read from the fallback catalog
+    read_retries: int  # reads tried again after a pass failed
+    search_errors: int  # catalog searches that failed
+    search_fallbacks: int  # years of search answered by the fallback catalog
     bytes_read: int
     median_run_minutes: float | None
     emails_sent: int
@@ -54,6 +57,11 @@ class Failure(BaseModel):
     error: str
 
 
+class Retraining(BaseModel):
+    labels: int
+    queued_utc: datetime
+
+
 class Summary(BaseModel):
     production_version: str  # the method new events come from
     precision_days: int
@@ -63,6 +71,8 @@ class Summary(BaseModel):
     precision: list[Precision]
     health: Health
     failures: list[Failure]
+    evaluation: evaluation.Scored | None  # the latest full scoring of the evaluation set
+    retraining: Retraining | None  # the latest candidate queued from feedback
 
 
 def _precision(s: Session, since: datetime, cfg: PipelineConfig) -> list[Precision]:
@@ -119,6 +129,9 @@ def _health(s: Session, since: datetime, now: datetime) -> Health:
             func.coalesce(func.sum(db.JobRun.passes_failed), 0),
             func.coalesce(func.sum(db.JobRun.fallback_passes), 0),
             func.coalesce(func.sum(db.JobRun.bytes_read), 0),
+            func.coalesce(func.sum(db.JobRun.read_retries), 0),
+            func.coalesce(func.sum(db.JobRun.search_errors), 0),
+            func.coalesce(func.sum(db.JobRun.search_fallbacks), 0),
             _median(
                 func.extract("epoch", db.JobRun.finished_utc - db.JobRun.started_utc) / 60
             ).filter(db.JobRun.finished_utc.is_not(None)),
@@ -150,7 +163,10 @@ def _health(s: Session, since: datetime, now: datetime) -> Health:
         passes_failed=runs[3],
         fallback_passes=runs[4],
         bytes_read=runs[5],
-        median_run_minutes=None if runs[6] is None else round(float(runs[6]), 1),
+        read_retries=runs[6],
+        search_errors=runs[7],
+        search_fallbacks=runs[8],
+        median_run_minutes=None if runs[9] is None else round(float(runs[9]), 1),
         emails_sent=emails[0],
         emails_failed=emails[1],
         emails_stuck=emails[2],
@@ -182,4 +198,6 @@ def summary(s: Session, cfg: PipelineConfig, now: datetime) -> Summary:
         precision=_precision(s, now - timedelta(days=m.precision_days), cfg),
         health=_health(s, now - timedelta(days=m.health_days), now),
         failures=[Failure(aoi_id=a, finished_utc=f, error=e or "") for a, f, e in failures],
+        evaluation=evaluation.load_scored(settings().data_dir),
+        retraining=buildings.candidate_info(settings().data_dir),
     )

@@ -11,7 +11,17 @@ from loguru import logger
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 
-from orbitdiff import accounts, buildings, composites, db, detection, jobs, mask_report, masking
+from orbitdiff import (
+    accounts,
+    buildings,
+    composites,
+    db,
+    detection,
+    jobs,
+    mask_report,
+    masking,
+    retraining,
+)
 from orbitdiff.aoi import load_geometry, make_grid
 from orbitdiff.config import REPO_ROOT, PipelineConfig, pipeline_config, settings
 from orbitdiff.fetch import fetch_aoi
@@ -53,13 +63,6 @@ def _composites(args: argparse.Namespace) -> None:
     print(composites.update_composites(args.id, pipeline_config(), settings().data_dir))
 
 
-def _mlflow():
-    import mlflow
-
-    mlflow.set_tracking_uri(settings().mlflow_tracking_uri)
-    return mlflow
-
-
 def _building_model(cfg: PipelineConfig, version: int | None) -> detection.Learned | None:
     """A registered version of the building model if asked for, else the champion, if any."""
     if version is None:
@@ -67,7 +70,7 @@ def _building_model(cfg: PipelineConfig, version: int | None) -> detection.Learn
     else:
         from orbitdiff import siamese
 
-        _mlflow()
+        retraining.tracked_mlflow()
         predictor = siamese.from_registry(cfg.buildings.registered_model, version)
     return predictor and detection.Learned(predictor, cfg.buildings.threshold)
 
@@ -89,7 +92,8 @@ def _evaluate(args: argparse.Namespace) -> None:
     print(evaluation.table(reports))
     if args.no_mlflow:
         return
-    mlflow = _mlflow()
+    evaluation.save_scored(reports, version, verified, settings().data_dir)
+    mlflow = retraining.tracked_mlflow()
     mlflow.set_experiment("evaluation")
     for name, report in reports.items():
         with mlflow.start_run(run_name=name):
@@ -104,14 +108,13 @@ def _evaluate(args: argparse.Namespace) -> None:
 
 
 def _train_buildings(args: argparse.Namespace) -> None:
-    import torch
-
-    from orbitdiff import oscd, siamese
-
-    cfg = pipeline_config().buildings
-    folder = oscd.download(cfg.oscd, settings().data_dir / "oscd")
-    trained = siamese.train(cfg, folder)
-    test = sum(trained.test.values(), siamese.Scores(0, 0, 0))
+    cfg, data_dir = pipeline_config().buildings, settings().data_dir
+    feedback = []
+    if args.feedback:
+        with db.session() as s:
+            feedback = retraining.load_not_real(s, data_dir)
+    result = retraining.train_candidate(cfg, data_dir, feedback, log=not args.no_mlflow)
+    trained, test = result.trained, result.test
     print(f"Validation ({', '.join(cfg.val_cities)}): F1 {trained.val.f1:.3f}")
     print(
         f"OSCD test, {len(trained.test)} cities: F1 {test.f1:.3f} "
@@ -120,48 +123,17 @@ def _train_buildings(args: argparse.Namespace) -> None:
     for name, s in trained.test.items():
         print(f"  {name:12} F1 {s.f1:.3f}")
     print(f"Trained in {trained.seconds / 60:.1f} min on CPU; kept step {trained.best_step}")
-    if args.no_mlflow:
-        return
-    mlflow = _mlflow()
-    mlflow.set_experiment("buildings")
-    with mlflow.start_run(run_name="siamese_unet_rgbn") as run:
-        mlflow.log_params(
-            cfg.model_dump(exclude={"oscd", "val_cities"})
-            | {
-                "bands": "B02,B03,B04,B08",
-                "input": "per-image standardised reflectance",
-                "dataset": "OSCD",
-                "dataset_version": oscd.version(cfg.oscd),
-                "train_cities": ",".join(
-                    c for c in oscd.cities(folder, "train") if c not in cfg.val_cities
-                ),
-                "val_cities": ",".join(cfg.val_cities),
-                "test_cities": ",".join(trained.test),
-                "pos_weight": round(trained.pos_weight, 3),
-                "best_step": trained.best_step,
-                "parameters": sum(p.numel() for p in trained.predictor.model.parameters()),
-                "torch": torch.__version__,
-                "device": "cpu",
-            }
+    if args.feedback:
+        print(
+            f"Feedback: trained on {result.trained_on}, held out {result.held_out}; "
+            f"held-out false alarms {result.false_alarms} "
+            f"(champion {result.champion_false_alarms})"
         )
-        for step, loss, f1 in trained.history:
-            mlflow.log_metrics({"train_loss": loss, "val_f1": f1}, step=step)
-        mlflow.log_metrics(
-            {
-                "val_precision": trained.val.precision,
-                "val_recall": trained.val.recall,
-                "oscd_test_precision": test.precision,
-                "oscd_test_recall": test.recall,
-                "oscd_test_f1": test.f1,
-                "train_seconds": trained.seconds,
-            }
-            | {f"oscd_test_f1_{name}": s.f1 for name, s in trained.test.items()}
+    if result.version is not None:
+        print(
+            f"Registered {cfg.registered_model} version {result.version} "
+            f"(run {result.run_id}). Not promoted: see `orbitdiff promote`."
         )
-        info = siamese.log_model(trained.predictor, cfg.registered_model)
-    print(
-        f"Registered {cfg.registered_model} version {info.registered_model_version} "
-        f"(run {run.info.run_id}). Not promoted: see `orbitdiff promote`."
-    )
 
 
 def _promote(args: argparse.Namespace) -> None:
@@ -202,7 +174,7 @@ def _promote(args: argparse.Namespace) -> None:
         rows["baseline"].overall,
         cfg.buildings.recall_tolerance,
     )
-    mlflow = _mlflow()
+    mlflow = retraining.tracked_mlflow()
     mlflow.set_experiment("promotion")
     with mlflow.start_run(run_name=f"promote {names['candidate']}"):
         mlflow.log_params(
@@ -234,13 +206,18 @@ def _worker(args: argparse.Namespace) -> None:
     redis = Redis.from_url(settings().redis_url)
     # SimpleWorker runs jobs in this process: the cloud model stays loaded between jobs,
     # and macOS can't fork safely once GDAL and PyTorch threads are running.
-    SimpleWorker([Queue(jobs.QUEUE, connection=redis)], connection=redis).work()
+    queues = [Queue(name, connection=redis) for name in (jobs.QUEUE, jobs.RETRAIN_QUEUE)]
+    SimpleWorker(queues, connection=redis).work()
 
 
 def _scheduler(args: argparse.Namespace) -> None:
     hours = pipeline_config().schedule.poll_every_hours
     while True:
         jobs.poll_watched()
+        try:
+            jobs.poll_retraining()
+        except Exception:  # a problem here must not stop areas being watched
+            logger.exception("retraining poll failed")
         if args.once:
             return
         time.sleep(hours * 3600)
@@ -300,6 +277,9 @@ def main(argv: list[str] | None = None) -> None:
         "train-buildings", help="train the building model on OSCD and register it (ml group)"
     )
     tb.add_argument("--no-mlflow", action="store_true", help="print only, register nothing")
+    tb.add_argument(
+        "--feedback", action="store_true", help='add "Not a real change" labels as hard negatives'
+    )
     tb.set_defaults(run=_train_buildings)
 
     pr = sub.add_parser(

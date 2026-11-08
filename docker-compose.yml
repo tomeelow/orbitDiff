@@ -14,11 +14,13 @@ x-app: &app
     ORBITDIFF_DATABASE_URL: postgresql+psycopg://orbitdiff:orbitdiff@db:5432/orbitdiff
     ORBITDIFF_REDIS_URL: redis://redis:6379/0
     ORBITDIFF_SMTP_HOST: mailpit
+    ORBITDIFF_TITILER_URL: http://titiler
     ORBITDIFF_WEB_URL: http://localhost:8080          # as the browser reaches them
     ORBITDIFF_API_URL: http://localhost:8000
     ORBITDIFF_CORS_ORIGINS: '["http://localhost:8080"]'
     ORBITDIFF_SIGNING_KEY: ${ORBITDIFF_SIGNING_KEY:?set it in .env; see .env.example}
     ORBITDIFF_ADMIN_EMAILS: ${ORBITDIFF_ADMIN_EMAILS:-[]}
+    ORBITDIFF_MLFLOW_TRACKING_URI: sqlite:////app/data/mlflow/mlflow.db  # retraining candidates
   volumes: [./data:/app/data]
   depends_on:
     migrate: { condition: service_completed_successfully }
@@ -47,6 +49,8 @@ services:
   worker:                            # backfills and alert emails
     <<: *app
     build: { context: ., args: { SYNC_ARGS: --group ml } }
+    # eval/: retraining keeps the areas of the evaluation set out of its training data.
+    volumes: [./data:/app/data, ./eval:/app/eval:ro]
     image: orbitdiff-worker
     command: orbitdiff worker
 
@@ -60,7 +64,7 @@ services:
       args: { VITE_API_URL: "http://localhost:8000" }
     restart: unless-stopped
     ports: ["8080:80"]
-    depends_on: [api, titiler]
+    depends_on: [api]
 
   db:
     image: postgis/postgis:17-3.7
@@ -84,13 +88,12 @@ services:
     image: axllent/mailpit:v1.32.0
     ports: ["1025:1025", "8025:8025"]
 
-  titiler:                           # map tiles from the composite COGs (ADR-007)
+  titiler:                           # renders map tiles from the composite COGs (ADR-007)
     image: ghcr.io/developmentseed/titiler:2.4.0
-    ports: ["8001:80"]
+    # Only for an API running on this machine: it reads any file it's asked for (ADR-013).
+    ports: ["127.0.0.1:8001:80"]
     environment:
       COLORMAP_DIRECTORY: /colormaps   # the mockup's NDVI ramp, from orbitdiff.render
-      # Tile URLs carry each month's version, so a URL's tiles never change.
-      TITILER_API_CACHECONTROL: "public, max-age=31536000, immutable"
       WEB_CONCURRENCY: "2"
     volumes:
       - ./data/composites:/data/composites:ro

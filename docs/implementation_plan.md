@@ -322,7 +322,7 @@ GET  /health
 > - Single-scene images come from the cube through the API (`/aois/{id}/scenes/{item}/{style}.png`), not TiTiler's STAC endpoints (ADR-010).
 > - The backfill is an RQ job (`orbitdiff worker`, a SimpleWorker): fetch → cloud model → composites → `scenes` and `months` rows, with progress on the AOI row. Records live in Postgres via SQLAlchemy and Alembic (`uv run alembic upgrade head`).
 > - TiTiler 2.4.0 runs in compose. It reads `data/composites` read-only and loads the mockup's NDVI ramp from `docker/titiler/colormaps`. Tile URLs carry each month's version, so they are cached as immutable.
-> - Before Phase 9 exposes anything: TiTiler's `url=` parameter can read any AOI's composites, so tiles must go through the API or signed URLs once AOIs belong to users.
+> - TiTiler's `url=` parameter can read any AOI's composites. Done 2026-11-08: browsers get tiles and point values only through the API, which checks the area's owner and relays the answer, and TiTiler has no public port (ADR-013).
 
 ---
 
@@ -506,7 +506,9 @@ CPU is fine for small AOIs. Keep PyTorch in a separate worker image so the API i
 >   - On L2A, Grünheide's yearly flagged-pixel rate is 0.5–0.8% before the Tesla factory, 6–9% while it was built, and about 2% since (`docs/spikes.md`, section 6).
 > - **Serving.** The model is one more detector (`detection.Learned`) in the one detection path, so its changes go through the opening, the minimum mapping unit, the false-alert rules and confirmation like any other. It joins production only as the promoted champion. Without one, every method and its version are unchanged. With one, events record it: `production-<hash>+orbitdiff_buildings/<version>`, and its threshold in `thresholds`. Verdicts are kept per pair of images, which brings production detection over ten years of Grünheide from 1,449 model calls to 373.
 > - **Promotion.** `orbitdiff promote --version N` runs the plan's gate on the evaluation set: production with the candidate against production with the champion, and the naive baseline. It refuses outright while the set has unverified or no labels, which is today. A promotion writes `data/models/buildings/champion.json` and the weights, which every worker reads at start-up (Docker included, through `./data`), and sets the `champion` alias in the MLflow registry.
-> - **Not yet:** the evaluation-set comparison with the baseline, which waits for verified labels; feedback labels as extra negatives; the L2A gap measured on OSCD's one test city with both dates inside the L2A archive (Chongqing, 2017-04 and 2018-04).
+> - **Feedback as negatives (2026-11-08).** `orbitdiff train-buildings --feedback`, or a candidate started by a flagged category (Phase 10). Each "Not a real change" labels only its own footprint, as no-change in that pair of composites: nobody said anything about the rest of the area. Those crops take 4 of each batch's 16 slots, and each patch counts equally in the loss however few pixels it has labels for. Pixels are standardised over the whole area, as they are when served. Split by area, and any area overlapping the evaluation set stays out entirely, so the gate never scores a model on what it trained on. The run refuses to start if it can't see the evaluation set. The held-out figure is the share of held-out "not real" pixels still called changed, for the candidate and the champion, logged to MLflow. A first run with dismissed events as stand-ins cut those false alarms fivefold and cost a third of OSCD test recall (`docs/spikes.md`, section 7). So the share of each batch is provisional, and the gate decides.
+> - **L2A gap, measured directly (2026-11-08).** Chongqing on OSCD's L1C and on L2A, same pixels: F1 0.246 against 0.252, and 99.59% of pixels agree (`docs/spikes.md`, section 6).
+> - **Not yet:** the evaluation-set comparison with the baseline, which waits for verified labels.
 
 ---
 
@@ -565,7 +567,7 @@ The same function powers the "N of M past changes would have alerted" preview.
 > - The new-pass loop is the incremental backfill: `orbitdiff scheduler` queues it every `poll_every_hours` for watched AOIs (claimed on the AOI's stage, so it's never queued twice), and its last step is `notify.notify`. The STAC search per AOI covers only the current year; finished years are cached. Grouping AOIs by MGRS tile waits for many AOIs.
 > - `notifications` holds one row per (event, user, kind), claimed and committed before sending: "alert", then at most one "update" when the event is confirmed, dismissed or found seasonal. A failed send is retried on the next run, up to `send_attempts`; a claim the process died holding is never resent.
 > - The email has inline before/after crops with the footprint outlined (the same PNGs the app shows), size, NDVI, months compared, status, method version, a deep link (`#/areas/{id}/changes/{event}`) and a signed "Not a real change" link (HMAC, `ORBITDIFF_SIGNING_KEY`, 90 days). The link opens a page with one button that POSTs, rather than recording on GET: scanners prefetch links. `feedback` stores the event's provenance with each verdict; the app has the same button.
-> - Not yet: rate limiting on `/auth/login`, a digest when many changes arrive at once, and TiTiler tiles behind the same ownership check (Phase 11).
+> - Added 2026-11-08: `/auth/login` is limited per address and per client (5 and 30 an hour, `[accounts]`), counted in Redis by a hash, and fails closed when Redis is down. More than `digest_over` (3) changes in one run go out as digests of up to `digest_size` (10), each change still claimed one by one so a retry can't double-send. `events.confidence` is the mean share of a change's footprint that changed on the clear passes that decided it, a measured share rather than a probability; it appears in emails and the app and doesn't affect what alerts. Recomputing Grünheide after this change gave the same 1,604 events.
 
 ---
 
@@ -591,7 +593,8 @@ Start with SQL over Postgres and a small internal admin page. Add Prometheus and
 > - `notifications.pass_utc` keeps the acquisition time of the pass that set the event's status, so the admin view shows the median time from pass to alert.
 > - `GET /admin/summary` (`orbitdiff.monitoring`, plain SQL) and the web app's `#/admin` page: precision from "Not a real change" per method version and category over `precision_days`, pipeline health over `health_days`, and recent failed runs. Admins are the addresses in `ORBITDIFF_ADMIN_EMAILS`; anyone else gets a 403. The view is aggregate: AOI ids at most, never names, geometries or email addresses.
 > - A category with at least `min_alerts` alerts and precision under `min_precision` is flagged "Review". Nothing acts on the flag: there's no retraining candidate to start until Phase 8, and thresholds stay a person's change, re-scored on the evaluation set. `[monitoring]` values are provisional.
-> - Not yet: evaluation-set scores on the page (they live in MLflow, which the API image doesn't carry), STAC search errors as a figure (they're logged, and a search that fails fails the run), and retries per job (RQ retries aren't recorded).
+> - Added 2026-11-08: catalog search errors, years answered by the fallback, and reads retried are recorded per run and shown (migration 0007). `orbitdiff evaluate` saves its latest table to `data/reports/evaluation.json` and the admin page shows it, with a warning while its labels aren't verified.
+> - **Retraining candidates (2026-11-08).** The scheduler queues one when the building model's category is flagged, a champion is running, and at least `retrain_min_new_labels` (20) new labels have come in since the last one. The worker takes it only when no backfill is waiting. It trains on OSCD plus the feedback (Phase 8 note), registers the result, and stops. Replacing the champion stays `orbitdiff promote`. Thresholds stay a person's change. The flag for rule-based methods still only asks for review.
 
 ---
 
@@ -630,7 +633,10 @@ volumes: { pg: {} }
 > - The web image builds with pnpm and serves `dist/` from nginx, with `.mjs` served as JavaScript (MapLibre's worker).
 > - On Linux, torch and torchvision come from PyTorch's CPU-only index (`[tool.uv.sources]`). The PyPI wheels carry CUDA libraries and Triton, which made the worker image 10.8 GB on a machine with no GPU. Same versions otherwise: OmniCloudMask gives identical classes with either build (6 real passes, every pixel).
 > - CI checks the compose file and builds the API, worker and web images on every PR, and checks that the worker imports the cloud model on a CPU-only PyTorch.
-> - Not yet (needs accounts and credentials): hosting, object storage, a real email provider, TLS, backups, deploying images from CI.
+> - The production half, 2026-11-08 (`deploy/`, runbook in `docs/deploy.md`): a standalone compose file where Caddy is the only published port and TLS comes by itself; one origin, with the API under `/api`; a nightly `backup` service (checked Postgres dump with retention, rclone to any S3-compatible bucket, mirror of rasters); `release.yml`, which builds the images for a version tag and, if a machine is configured, moves it there. `main` never deploys itself.
+> - Rasters stay on the machine's disk, with object storage as a nightly mirror: a deliberate change from ADR-006 (ADR-014).
+> - Run locally end to end under a separate project name with local TLS: sign-in through Caddy with a Secure cookie, spoofed `X-Forwarded-For` ignored by the sign-in limit, a backfill of a new area through to tiles, a backup restored into a scratch database.
+> - Not yet (needs accounts): the machine, the domain, the email provider, the bucket, and a first run of `release.yml` and `deploy/update.sh`.
 
 ---
 

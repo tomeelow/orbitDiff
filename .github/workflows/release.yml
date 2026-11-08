@@ -1,0 +1,86 @@
+name: release
+
+# Builds the images for a version tag and, if a machine is configured, moves it there. It
+# runs only when someone tags a version or starts it by hand: `main` never deploys itself.
+# What the deploy job needs is in docs/deploy.md.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: An existing version tag, e.g. v1.2.0
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+
+env:
+  VERSION: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: The version is a plain tag name
+        run: '[[ "$VERSION" =~ ^v[0-9A-Za-z.-]+$ ]]'
+
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ env.VERSION }}
+
+      - name: Sign in to the registry
+        run: echo "$TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+        env:
+          TOKEN: ${{ github.token }}
+
+      - name: Build
+        run: |
+          prefix="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}"
+          docker build --tag "$prefix/orbitdiff-app:$VERSION" .
+          docker build --tag "$prefix/orbitdiff-worker:$VERSION" --build-arg SYNC_ARGS="--group ml" .
+          docker build --tag "$prefix/orbitdiff-web:$VERSION" --build-arg VITE_API_URL=/api web
+          docker build --tag "$prefix/orbitdiff-backup:$VERSION" --file docker/backup.Dockerfile .
+
+      - name: The images start
+        run: |
+          prefix="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}"
+          docker run --rm "$prefix/orbitdiff-app:$VERSION" python -c "import orbitdiff.api"
+          docker run --rm "$prefix/orbitdiff-worker:$VERSION" python -c "import orbitdiff.siamese"
+          docker run --rm "$prefix/orbitdiff-backup:$VERSION" sh -c "pg_dump --version && rclone version"
+
+      - name: Push
+        run: |
+          prefix="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}"
+          for image in app worker web backup; do
+            docker push "$prefix/orbitdiff-$image:$VERSION"
+          done
+
+  deploy:
+    needs: images
+    if: vars.DEPLOY_HOST != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    steps:
+      - name: Move the machine to this version
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy
+          chmod 600 ~/.ssh/deploy
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy "$DEPLOY_USER@$DEPLOY_HOST" "$DEPLOY_PATH/deploy/update.sh $VERSION"
