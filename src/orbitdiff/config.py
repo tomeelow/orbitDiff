@@ -136,10 +136,20 @@ class AccountsConfig(_Section):
     login_per_ip: int = Field(ge=1)
 
 
+class GfcConfig(_Section):
+    version: str
+    url: str  # with {version}, {layer} and {granule}
+    last_loss_year: int
+    min_treecover: int = Field(ge=0, le=100)
+    year_tolerance: int = Field(ge=0)
+    min_overlap: float = Field(gt=0, le=1)
+
+
 class EvaluationConfig(_Section):
     min_overlap: float = Field(gt=0, le=1)
     months_before: int = Field(ge=0)
     months_after: int = Field(ge=0)
+    gfc: GfcConfig
 
 
 class OscdConfig(_Section):

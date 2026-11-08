@@ -76,13 +76,20 @@ def _building_model(cfg: PipelineConfig, version: int | None) -> detection.Learn
 
 
 def _evaluate(args: argparse.Namespace) -> None:
-    from orbitdiff import evaluation
+    from orbitdiff import evaluation, gfc
 
     cfg = pipeline_config()
     model = _building_model(cfg, args.model_version)
     names = args.method or ["naive", "cva", "bfast", *(["unet"] if model else []), "production"]
+    forest_check = gfc.CrossCheck(cfg, settings().data_dir)
     reports, version, verified = evaluation.evaluate(
-        names, cfg, settings().data_dir, args.eval_dir, fetch=args.fetch, buildings=model
+        names,
+        cfg,
+        settings().data_dir,
+        args.eval_dir,
+        fetch=args.fetch,
+        buildings=model,
+        cross_check=forest_check,
     )
     if not reports:
         raise SystemExit(f"No labelled AOIs in {args.eval_dir}: see eval/README.md")
@@ -90,6 +97,7 @@ def _evaluate(args: argparse.Namespace) -> None:
     if model:
         print(f"Building model {model.probability.version}")
     print(evaluation.table(reports))
+    print(f"\n{forest_check.table()}")
     if args.no_mlflow:
         return
     evaluation.save_scored(reports, version, verified, settings().data_dir)
@@ -102,9 +110,10 @@ def _evaluate(args: argparse.Namespace) -> None:
                 | {"buildings_model": model and model.probability.version}
                 | cfg.detection.model_dump(exclude={"categories"})
                 | {f"category_{k}": v for k, v in cfg.detection.categories.model_dump().items()}
-                | cfg.evaluation.model_dump()
+                | cfg.evaluation.model_dump(exclude={"gfc"})
+                | forest_check.params()
             )
-            mlflow.log_metrics(evaluation.metrics(report))
+            mlflow.log_metrics(evaluation.metrics(report) | forest_check.metrics(name))
 
 
 def _train_buildings(args: argparse.Namespace) -> None:

@@ -330,3 +330,62 @@ Don't read much more into it:
 The seed and crops are the same, but the loss is now averaged per patch, which is the same
 maths with different floating-point rounding. Over 3,000 steps that moved F1 by about 0.02, so
 differences of that size between two runs are noise.
+
+## 8. Events against Hansen Global Forest Change (2026-11-08)
+
+`orbitdiff evaluate` now compares `vegetation_loss` events still standing (pending or confirmed)
+with the loss years in GFC-2025-v1.13, and reports GFC loss that no event covers. **This is a
+second opinion, not ground truth.** GFC is another model's annual map from Landsat. Its own notes
+call it a relative indicator and warn against taking definitive areas from its pixel counts. It
+can only speak for stand-replacing loss of trees that stood in 2000, and its last year is 2025.
+None of this feeds detection, alerts or the promotion gate.
+
+The run covered Grünheide (8.52 km², January 2017 to November 2026), from the cube and composites
+already on disk, so no imagery was refetched. `eval/` has no labelled areas yet, so the run used a
+throwaway copy of the polygon with no labels, and its labelled table measures nothing. GFC years
+judged: 2017 to 2025. There are 45 GFC patches above the minimum mapping unit in those years.
+
+| Method | Vegetation-loss events | Matched within 1 yr | No GFC loss | Not forest in 2000 | After 2025 | Patches seen as vegetation loss | Seen as another category | Seen by no event |
+|---|---|---|---|---|---|---|---|---|
+| naive | 100 | 32 | 12 | 26 | 30 | 21 | 18 | 6 |
+| cva | 97 | 58 | 5 | 11 | 23 | 13 | 27 | 5 |
+| bfast | 28 | 9 | 5 | 9 | 5 | 8 | 36 | 1 |
+| production | 20 | 14 | 1 | 4 | 1 | 11 | 12 | 22 |
+
+"Production, confirmed only" is identical, because no event is still pending. An event matches
+when GFC loss in the same or an adjacent year covers at least a quarter of it. A patch counts as
+seen when standing events from those years cover at least a quarter of it.
+
+**What production keeps, GFC mostly corroborates.** 14 of the 15 events it can judge have GFC
+loss under them. The Tesla clearing (90.24 ha, March 2020) is 95% GFC loss in 2019 to 2021. The
+timing carries information: with the same events moved 3, 4 or 5 years either way, 0 to 3 of them
+match instead of 14. Three of the 14 rest on less than half their footprint, though. The weakest
+(5.35 ha, January 2023) is mostly on loss GFC dates to 2020.
+
+**The category is a bigger gap than detection.** 12 patches, 127 ha including 69 ha in 2021 and
+32 ha in 2023, are covered only by events of another category. Forest cleared down to bare ground
+or roofs isn't being called `vegetation_loss`.
+
+**"Seen by no event" turns out to mean "filed as seasonal".** 22 patches, 20.2 ha in all, median
+0.42 ha, 12 of them under the default 0.5 ha alert size. Every one lies at least a quarter under
+an event the pipeline labelled `seasonal` in some year, and 1,225 of production's 1,604 events
+here are seasonal. Either the seasonal rule is too eager on real clearings, or these are GFC's
+errors. One area can't say which. No threshold was changed; it's something to check while
+verifying labels.
+
+The rest don't say much. The one event with no GFC loss (0.28 ha, January 2023) sits on loss GFC
+dates to 2021, two years earlier. The four "not forest" events have too little canopy in the 2000
+layer for GFC to speak for them, which covers trees that grew in since.
+
+**Limits.** One area, mostly pine, with one very large clearing. A 3-year window is generous. The
+seen and unseen counts inherit detection's 3 x 3 opening, on purpose, so that both sides mean the
+same thing by a region. Disagreement here is a place to look, never a false alert or a miss.
+
+**Cost.** 1.21 MB of 411 MB for both layers. GFC's GeoTIFFs are striped with no overviews, so
+they're not COGs: a window costs whole 10-degree rows, but only the 100 or so it crosses of
+40,000. Bytes are counted as everywhere else, from the blocks under the window. The TIFF header
+and strip tables aren't in that figure; GDAL logged about 0.2 MB of separate range requests per
+layer. Layers are kept per grid under `data/gfc/<version>/`, so changing a threshold reads nothing
+again.
+
+Source: Hansen/UMD/Google/USGS/NASA (CC BY 4.0; citation in the README).
