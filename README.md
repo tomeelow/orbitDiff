@@ -8,6 +8,12 @@ a new satellite pass shows a change.
 A change map is easy to make. The point of this project is an alert you can trust: one
 that survives clouds, haze, seasons and sensor quirks before it reaches your inbox.
 
+![The app on Grünheide: March 2019 on the left of the divider, March 2020 on the right, with the clearing for the Tesla factory outlined as a confirmed change](docs/app-grunheide.jpg)
+
+*Grünheide, near Berlin: March 2019 left of the divider, March 2020 right of it. The yellow
+outline is the 90 ha clearing for the Tesla factory, found and confirmed by the pipeline.
+Imagery: Copernicus Sentinel-2.*
+
 ## Why it's hard
 
 Most things that look like change aren't:
@@ -160,11 +166,27 @@ in [`docs/spikes.md`](docs/spikes.md), section 6.
 | 5. Web app: draw an AOI, browse the archive | done |
 | 6. Evaluation harness and naive baseline (labels still to verify) | done |
 | 7. Classical detectors, events and statuses (thresholds provisional) | done |
-| 8. U-Net for buildings (promotion waits for verified labels) | in progress |
-| 9. Accounts, alert rules, alert emails, feedback | done |
+| 8. U-Net for buildings: trained, registered, gated (promotion waits for verified labels) | built |
+| 9. Accounts, alert rules, alert emails, feedback, deleting an area or an account | done |
 | 10. Monitoring, and retraining candidates from feedback | done |
-| 11. Docker Compose stack; production stack, releases and backups (built and run locally, not deployed yet) | in progress |
+| 11. Docker Compose stack; production stack with one-script setup, releases and backups | ready to deploy |
 | 12. Documentation (the benchmark waits for verified labels) | in progress |
+
+### What's left, and why it isn't code
+
+Everything above runs. Three things need a person:
+
+1. **A deployment.** A machine, a domain and an email provider's credentials, then
+   `deploy/setup.sh` ([`docs/deploy.md`](docs/deploy.md)). The stack and the script have run
+   end to end locally, never against a real domain or mail provider.
+2. **A verified evaluation set.** 20 to 50 areas labelled in the app and checked against
+   high-resolution imagery ([`eval/README.md`](eval/README.md)). Until it exists there is no
+   benchmark table, every threshold in `config/pipeline.toml` stays provisional, and
+   `orbitdiff promote` refuses to put the building model into production. This is the step
+   that decides whether the alerts can be trusted, and nobody can label it from a keyboard
+   without looking.
+3. **The story.** A blog post and a demo video want a live demo to link to and a finding from
+   that evaluation set.
 
 `mockup/orbit-diff.html` is an early sketch of the UI (synthetic imagery and events), not its final design.
 
