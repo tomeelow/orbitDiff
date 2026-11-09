@@ -1,4 +1,7 @@
-/** Small shared pieces: a segmented control and the loading and error states. */
+/** Small shared pieces: a segmented control, a delete that asks first, and the loading and
+error states. */
+
+import { useState } from "react";
 
 export function Segmented<T extends string>({
   label,
@@ -49,5 +52,66 @@ export function ErrorState({ message, onRetry }: { message: string; onRetry: () 
         </button>
       </div>
     </main>
+  );
+}
+
+/** Something that can't be undone, behind a second click that says what goes with it. */
+export function ConfirmDelete({
+  label,
+  warning,
+  onDelete,
+}: {
+  label: string;
+  warning: string;
+  onDelete: () => Promise<void>;
+}) {
+  const [state, setState] = useState<"idle" | "asking" | "deleting">("idle");
+  const [error, setError] = useState<string | null>(null);
+
+  async function confirm() {
+    setState("deleting");
+    setError(null);
+    try {
+      await onDelete();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setState("asking");
+    }
+  }
+
+  if (state === "idle") {
+    return (
+      <button type="button" className="btn btn-quiet" onClick={() => setState("asking")}>
+        {label}
+      </button>
+    );
+  }
+  return (
+    <div className="confirm" role="alertdialog" aria-label={label}>
+      <p>{warning}</p>
+      {error && (
+        <p className="error-text small" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="actions">
+        <button
+          type="button"
+          className="btn btn-danger"
+          onClick={confirm}
+          disabled={state === "deleting"}
+        >
+          {state === "deleting" ? "Deleting…" : label}
+        </button>
+        <button
+          type="button"
+          className="btn"
+          onClick={() => setState("idle")}
+          disabled={state === "deleting"}
+        >
+          Keep it
+        </button>
+      </div>
+    </div>
   );
 }

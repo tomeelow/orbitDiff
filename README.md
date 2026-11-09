@@ -83,6 +83,9 @@ display only and never count as evidence.
     the feedback trains a retraining candidate. It is only registered: replacing the
     champion is a person's decision, through the gate.
 
+Your areas are yours: only you see them, and deleting an area, or your account, removes its
+imagery, changes, alert settings and feedback for good (ADR-015).
+
 ## Results
 
 **There is no benchmark table yet.** The evaluation set's labels have to be checked against

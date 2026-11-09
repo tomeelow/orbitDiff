@@ -8,8 +8,9 @@ pauses; one that still fails is left out and retried on the next run.
 
 import time
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date
 from functools import partial
@@ -47,6 +48,19 @@ class FetchSummary:
             f"{self.full_bytes / 1e6:.0f} MB in the same files ({share}) in {self.seconds:.0f}s\n"
             f"passes per year: {', '.join(f'{y}: {n}' for y, n in self.per_year.items())}"
         )
+
+
+@contextmanager
+def _read_pool(workers: int) -> Iterator[ThreadPoolExecutor]:
+    """A thread pool that drops the reads still queued when its block fails. A plain
+    `with ThreadPoolExecutor` would run every one of them first: hours, for an archive."""
+    pool = ThreadPoolExecutor(workers)
+    try:
+        yield pool
+    except BaseException:
+        pool.shutdown(wait=False, cancel_futures=True)
+        raise
+    pool.shutdown()
 
 
 def fetch_aoi(
@@ -90,7 +104,7 @@ def fetch_aoi(
     batch: list[reading.PassRead] = []
     grid.mask  # noqa: B018 - rasterize once here, not concurrently in every worker
     pending, settled, rounds, retried = todo, 0, cfg.reading.retry_rounds, 0
-    with ThreadPoolExecutor(cfg.reading.workers) as pool:
+    with _read_pool(cfg.reading.workers) as pool:
         for attempt in range(rounds + 1):
             if attempt:
                 wait = cfg.reading.retry_wait_s * 2 ** (attempt - 1)

@@ -510,3 +510,49 @@ deployment direction is one machine (implementation plan, Phase 11).
 - The machine's disk limits how many areas it can hold, and a second worker machine would
   need shared storage. That's the moment to implement ADR-006 as first written.
 - `rclone sync` is a mirror, not a history: a raster deleted here is deleted there.
+
+---
+
+## ADR-015 — Deleting an area or an account deletes everything about it
+
+**Status:** accepted · **Date:** 2026-11-10
+
+### Context
+
+An area around someone's home is personal data, and so are the pictures of it, the changes
+found in it and the address alerts go to. Until now nothing could be removed except by hand
+in the database.
+
+### Decision
+
+- `DELETE /aois/{id}` removes the area's row, and with it (every foreign key cascades) its
+  passes, months, changes, alert rule, notifications, job runs and feedback. It then removes
+  the area's cube, masks, composites and reports from disk.
+- `DELETE /auth/me` does the same for every area the account owns, and removes the account,
+  its sessions and its sign-in links.
+- A backfill queued or running for a deleted area isn't cancelled through the queue. It finds
+  the row gone at its next progress write, stops reading, and removes what it wrote since.
+- Both are final. The web app asks once more before either, and says what goes.
+
+### Reasoning
+
+- **Feedback goes too.** "Not a real change" is training data, and a deleted area's feedback
+  carries the footprint of a change inside it. Keeping it would keep part of the place. The
+  retraining set shrinks; that is the price of the promise.
+- **The worker checks the row, not the queue.** One rule covers a queued job, a running one
+  and a retry, and the API needs no handle on the queue to delete.
+- **Evaluation labels stay.** A file an admin saved to `eval/` is in git on purpose: it is the
+  evaluation set, not a user's data.
+
+### Consequences
+
+- Nightly Postgres dumps still hold a deleted area for as long as they are kept
+  (`ORBITDIFF_BACKUP_KEEP_DAYS`, 14 by default). The raster mirror follows the disk on its
+  next sync.
+- The STAC search cache keeps its per-year item lists under a hash of the geometry. It holds
+  public catalog records and no polygon.
+
+### What would change our mind
+
+A legal need to keep records of alerts sent, which would mean keeping a minimal,
+geometry-free row per notification.
