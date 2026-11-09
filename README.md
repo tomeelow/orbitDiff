@@ -180,8 +180,10 @@ in [`docs/spikes.md`](docs/spikes.md), section 6.
 
 ## Deploying
 
-[`docs/deploy.md`](docs/deploy.md): one machine behind Caddy, with what you need to provide,
-updates, backups and how to restore them.
+One machine behind Caddy. You bring a Linux machine, a domain and an email provider's SMTP
+credentials; on the machine, `deploy/setup.sh` asks for them, generates the secrets, starts
+the stack and checks it with `orbitdiff doctor`. [`docs/deploy.md`](docs/deploy.md) has the
+details: who can sign in, updates, backups and how to restore them.
 
 ## Running it locally
 
@@ -317,7 +319,7 @@ eval/            the evaluation set: labelled areas, in git
 migrations/      Alembic migrations
 spikes/          scripts behind the findings in docs/spikes.md
 docs/            implementation plan, ADRs, spike results, deploy runbook
-deploy/          production compose file, Caddy, backups, updates
+deploy/          production compose file, Caddy, first-time setup, updates, backups
 mockup/          an early UI sketch
 docker/          TiTiler colormap, backup image
 examples/        a sample AOI

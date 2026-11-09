@@ -308,6 +308,23 @@ def test_failed_backfill_is_recorded_and_can_be_retried(client, aoi_polygon, mon
     assert client.queued == [aoi_id, aoi_id]
 
 
+def test_the_doctor_finds_the_database_migrated_and_the_data_folder_writable(data_dir):
+    from orbitdiff import doctor
+
+    by_name = {c.name: c for c in doctor.CHECKS}
+    assert "PostGIS 3" in by_name["database"].run()
+    assert str(data_dir) in by_name["data folder"].run()
+    with db.engine().begin() as c:
+        head = c.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+        c.execute(text("UPDATE alembic_version SET version_num = '0001'"))
+    try:
+        with pytest.raises(RuntimeError, match="run the migrations"):
+            by_name["database"].run()
+    finally:
+        with db.engine().begin() as c:
+            c.execute(text("UPDATE alembic_version SET version_num = :head"), {"head": head})
+
+
 def test_health_reports_what_is_down(client):
     assert client.get("/health").json() == {"db": "ok", "queue": "ok"}
     api.app.dependency_overrides[api.get_redis] = lambda: FakeRedis(up=False)

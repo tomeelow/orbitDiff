@@ -1,5 +1,5 @@
 """Command line entry points: `orbitdiff fetch|mask|mask-report|composites|evaluate|
-train-buildings|promote|worker|scheduler|assign-aois`."""
+train-buildings|promote|worker|scheduler|assign-aois|doctor`."""
 
 import argparse
 import sys
@@ -249,6 +249,13 @@ def _assign_aois(args: argparse.Namespace) -> None:
     print(f"{len(assigned)} AOIs now belong to {email}: {sorted(assigned)}")
 
 
+def _doctor(args: argparse.Namespace) -> None:
+    from orbitdiff import doctor
+
+    if not doctor.run(args.email):
+        raise SystemExit(1)
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="orbitdiff")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -308,6 +315,10 @@ def main(argv: list[str] | None = None) -> None:
     assign = sub.add_parser("assign-aois", help="give AOIs with no owner to an account")
     assign.add_argument("--email", required=True, help="the owner's sign-in address")
     assign.set_defaults(run=_assign_aois)
+
+    doctor = sub.add_parser("doctor", help="check that this installation is set up to work")
+    doctor.add_argument("--email", help="also send one test email to this address")
+    doctor.set_defaults(run=_doctor)
 
     args = parser.parse_args(argv)
     logger.remove()

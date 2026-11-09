@@ -51,6 +51,9 @@ jobs:
       - name: Test
         run: uv run --group ml pytest -rs   # -rs: a skipped test would show here
 
+      - name: Deploy scripts are clean
+        run: shellcheck deploy/*.sh
+
       - name: Compose file is valid
         run: docker compose config --quiet
         env:

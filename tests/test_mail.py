@@ -33,6 +33,9 @@ class FakeSmtp:
     def send_message(self, message):
         self.calls.append(f"send from {message['From']}")
 
+    def noop(self):
+        self.calls.append("noop")
+
 
 @pytest.fixture(autouse=True)
 def smtp(monkeypatch):
@@ -77,3 +80,13 @@ def test_credentials_never_travel_without_tls(monkeypatch):
     with pytest.raises(RuntimeError, match="STARTTLS"):
         mail.send(EmailMessage())
     assert FakeSmtp.connections == []
+
+
+def test_checking_signs_in_like_a_send_and_sends_nothing(monkeypatch):
+    monkeypatch.setenv("ORBITDIFF_SMTP_HOST", "smtp.example.com")
+    monkeypatch.setenv("ORBITDIFF_SMTP_STARTTLS", "true")
+    monkeypatch.setenv("ORBITDIFF_SMTP_USERNAME", "key")
+    monkeypatch.setenv("ORBITDIFF_SMTP_PASSWORD", "not-a-real-secret")
+    settings.cache_clear()
+    mail.check()
+    assert FakeSmtp.connections[0].calls == ["starttls", "login key not-a-real-secret", "noop"]
