@@ -4,6 +4,7 @@
 [aoi]
 max_km2 = 10                      # windowed reads and the per-AOI cube assume small areas (ADR-001)
 archive_start = 2017-01-01
+max_per_user = 5                  # areas one account may watch: each is hours of one worker and ~500 MB of disk
 
 # The one place that maps our band names to each catalog's asset keys.
 [catalog.primary]                 # ADR-002: one item per pass, newest processing baseline

@@ -204,6 +204,8 @@ export interface AdminSummary {
 
 export interface Limits {
   max_area_km2: number;
+  max_areas: number; // areas one account may have
+  invite_only: boolean; // sign-in links go only to invited addresses
 }
 
 /** Fired when the API says the session is gone, so the app can ask to sign in again. */

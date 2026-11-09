@@ -1,5 +1,6 @@
 import { type FormEvent, useEffect, useState } from "react";
 import { api } from "../api";
+import { useLoad } from "../hooks";
 
 type Sent =
   | { state: "idle" }
@@ -11,6 +12,8 @@ export function SignInPage() {
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState<Sent>({ state: "idle" });
   const [error, setError] = useState<string | null>(null);
+  const [limits] = useLoad(api.limits, []);
+  const inviteOnly = limits.state === "done" && limits.data.invite_only;
   useEffect(() => {
     document.title = "Sign in — Orbit Diff";
   }, []);
@@ -38,6 +41,12 @@ export function SignInPage() {
               We sent a sign-in link to <strong>{sent.email}</strong>. Open it in this browser to
               sign in here. It works for {sent.minutes} minutes.
             </p>
+            {inviteOnly && (
+              <p className="muted small">
+                This Orbit Diff is by invitation: the link only arrives if its owner has added your
+                address.
+              </p>
+            )}
             {import.meta.env.DEV && (
               <p className="muted small">
                 Development: every email lands in Mailpit at{" "}
@@ -58,6 +67,8 @@ export function SignInPage() {
             <p className="muted">
               We email you a link to sign in: there's no password. Alerts about the areas you watch
               go to the same address.
+              {inviteOnly &&
+                " This Orbit Diff is by invitation: ask its owner to add your address."}
             </p>
             <label htmlFor="email">Email</label>
             <div className="field-row">

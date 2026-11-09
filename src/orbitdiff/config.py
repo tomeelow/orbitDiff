@@ -27,6 +27,7 @@ class _Section(BaseModel):
 class AOIConfig(_Section):
     max_km2: float = Field(gt=0)
     archive_start: date
+    max_per_user: int = Field(ge=1)
 
 
 class Catalog(_Section):
@@ -227,6 +228,8 @@ class Settings(BaseSettings):
     signing_key: SecretStr | None = None
     # Who sees the admin view (pipeline health, alert precision). JSON list in the env.
     admin_emails: list[str] = []
+    # Who may sign in, besides the admins. Empty: anyone with an email address.
+    invited_emails: list[str] = []
 
 
 def load_pipeline_config(path: Path) -> PipelineConfig:
