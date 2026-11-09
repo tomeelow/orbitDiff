@@ -8,6 +8,12 @@ a new satellite pass shows a change.
 A change map is easy to make. The point of this project is an alert you can trust: one
 that survives clouds, haze, seasons and sensor quirks before it reaches your inbox.
 
+![The app on Grünheide: March 2019 on the left of the divider, March 2020 on the right, with the clearing for the Tesla factory outlined as a confirmed change](docs/app-grunheide.jpg)
+
+*Grünheide, near Berlin: March 2019 left of the divider, March 2020 right of it. The yellow
+outline is the 90 ha clearing for the Tesla factory, found and confirmed by the pipeline.
+Imagery: Copernicus Sentinel-2.*
+
 ## Why it's hard
 
 Most things that look like change aren't:
