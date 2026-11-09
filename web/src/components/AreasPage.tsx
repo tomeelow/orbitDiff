@@ -1,8 +1,8 @@
 import { useEffect } from "react";
-import { api, type Stage } from "../api";
+import { api, SIGNED_OUT, type Stage } from "../api";
 import { useLoad } from "../hooks";
 import { formatArea } from "../lib/format";
-import { ErrorState, LoadingState } from "./ui";
+import { ConfirmDelete, ErrorState, LoadingState } from "./ui";
 
 const STAGE: Record<Stage, string> = {
   queued: "waiting to start",
@@ -61,6 +61,16 @@ export function AreasPage() {
           ))}
         </ul>
       )}
+      <footer className="account-end">
+        <ConfirmDelete
+          label="Delete my account"
+          warning="This deletes your account for good: every area you drew with its imagery, changes, alert settings and feedback, and your email address. Alerts stop."
+          onDelete={async () => {
+            await api.deleteAccount();
+            window.dispatchEvent(new Event(SIGNED_OUT));
+          }}
+        />
+      </footer>
     </main>
   );
 }

@@ -27,7 +27,7 @@ from redis import Redis
 from redis.exceptions import RedisError
 from shapely import set_precision
 from shapely.geometry import mapping, shape
-from sqlalchemy import func, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -261,6 +261,17 @@ def get_aoi(aoi_id: int, s: SessionDep, user: UserDep) -> AoiDetail:
         bytes_read=scenes[2],
         whole_files_bytes=round((scenes[3] or 0) * scenes[0]),
     )
+
+
+@app.delete("/aois/{aoi_id}", status_code=204)
+def delete_aoi(aoi_id: int, s: SessionDep, user: UserDep) -> None:
+    """Delete an AOI and everything kept about it: its passes, months, changes, alert rule,
+    emails sent, feedback given, and its rasters. A backfill still running for it notices
+    and stops (jobs.backfill). Not undoable."""
+    s.delete(_aoi(s, aoi_id, user))
+    s.commit()  # the rows that hang off it go with it: every one cascades (db.py)
+    jobs.remove_rasters(settings().data_dir, aoi_id)
+    logger.info("AOI {} deleted by its owner", aoi_id)
 
 
 @app.post("/aois/{aoi_id}/backfill", status_code=202)
@@ -774,6 +785,21 @@ def callback(token: str, s: SessionDep) -> Response:
 @app.get("/auth/me")
 def me(user: UserDep) -> Me:
     return Me(email=user.email, admin=_is_admin(user))
+
+
+@app.delete("/auth/me", status_code=204)
+def delete_account(s: SessionDep, user: UserDep, response: Response) -> None:
+    """Delete the account and everything it owns: its AOIs with all their records and
+    rasters, its sessions, and its address. Not undoable. Evaluation labels an admin saved
+    to eval/ are files in the repository and stay there."""
+    aoi_ids = list(s.scalars(select(db.Aoi.id).where(db.Aoi.user_id == user.id)))
+    s.execute(delete(db.LoginLink).where(db.LoginLink.email == user.email))
+    s.delete(user)
+    s.commit()
+    for aoi_id in aoi_ids:
+        jobs.remove_rasters(settings().data_dir, aoi_id)
+    response.delete_cookie(accounts.COOKIE)
+    logger.info("account {} deleted by its owner, with {} AOIs", user.id, len(aoi_ids))
 
 
 @app.get("/admin/summary")

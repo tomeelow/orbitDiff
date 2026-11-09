@@ -528,6 +528,96 @@ def test_assign_aois_gives_ownerless_aois_an_owner(client, aoi_polygon, capsys):
     assert [a["id"] for a in client.get("/aois").json()] == [aoi_id]
 
 
+def rows_about(aoi_id: int) -> dict[str, int]:
+    with db.session() as s:
+        return {
+            table.__tablename__: s.scalar(
+                select(func.count()).select_from(table).where(table.aoi_id == aoi_id)
+            )
+            for table in (db.Scene, db.Month, db.Event, db.AlertRule, db.JobRun)
+        }
+
+
+def rasters_of(data_dir, aoi_id: int) -> list:
+    return [p for p in data_dir.rglob("*") if str(aoi_id) in (p.name, p.stem)]
+
+
+def test_deleting_an_aoi_removes_its_records_and_its_rasters(
+    client, data_dir, aoi_polygon, make_scene, monkeypatch
+):
+    monkeypatch.setattr(catalog, "search", lambda *a, **k: [make_scene("aug")])
+    aoi_id = create(client, aoi_polygon).json()["id"]
+    kept = create(client, aoi_polygon).json()["id"]
+    jobs.backfill(aoi_id, model=lambda red, green, nir: (red * 0).astype("uint8"))
+    client.put(f"/aois/{aoi_id}/alert-rule", json=RULE | {"enabled": True})
+    assert rows_about(aoi_id) == {
+        "scenes": 1,
+        "months": 1,
+        "events": 0,
+        "alert_rules": 1,
+        "job_runs": 1,
+    }
+    assert len(rasters_of(data_dir, aoi_id)) == 3  # cube, masks, composites
+
+    client.cookies.clear()
+    sign_in(client, "someone-else@example.com")
+    assert client.delete(f"/aois/{aoi_id}").status_code == 404  # not theirs to delete
+    client.cookies.clear()
+    sign_in(client, "owner@example.com")
+    assert client.delete(f"/aois/{aoi_id}").status_code == 204
+
+    assert client.get(f"/aois/{aoi_id}").status_code == 404
+    assert [a["id"] for a in client.get("/aois").json()] == [kept]
+    assert not any(rows_about(aoi_id).values())
+    assert rasters_of(data_dir, aoi_id) == []
+    assert client.delete(f"/aois/{aoi_id}").status_code == 404  # already gone
+
+
+def test_a_backfill_stops_and_cleans_up_when_its_aoi_is_deleted(
+    client, data_dir, aoi_polygon, make_scene, monkeypatch
+):
+    aoi_id = create(client, aoi_polygon).json()["id"]
+
+    def deleted_while_searching(*args, **kwargs):
+        assert client.delete(f"/aois/{aoi_id}").status_code == 204
+        return [make_scene("aug")]
+
+    monkeypatch.setattr(catalog, "search", deleted_while_searching)
+    jobs.backfill(aoi_id, model=lambda red, green, nir: (red * 0).astype("uint8"))  # no error
+
+    assert rasters_of(data_dir, aoi_id) == []  # what it read after the delete is gone too
+    assert not any(rows_about(aoi_id).values())
+    jobs.backfill(aoi_id, model=lambda *bands: None)  # still queued for a deleted AOI: a no-op
+
+
+def test_deleting_an_account_removes_everything_it_owns(client, data_dir, detected, aoi_polygon):
+    aoi_id, grid, sync = detected
+    sync(make_event(grid, slice(10, 20), "2021-05", ("pending", "S2A_new", "2021-05-05")))
+    (event,) = client.get(f"/aois/{aoi_id}/events").json()
+    client.post(f"/aois/{aoi_id}/events/{event['id']}/feedback")
+    leftovers = data_dir / "composites" / str(aoi_id)
+    leftovers.mkdir(parents=True)
+
+    client.cookies.clear()
+    sign_in(client, "someone-else@example.com")
+    theirs = create(client, aoi_polygon).json()["id"]
+    client.cookies.clear()
+    sign_in(client, "owner@example.com")
+
+    assert client.delete("/auth/me").status_code == 204
+    assert client.get("/auth/me").status_code == 401  # the session went with the account
+    with db.session() as s:
+        assert s.scalars(select(db.User.email)).all() == ["someone-else@example.com"]
+        assert s.scalars(select(db.Aoi.id)).all() == [theirs]
+        assert set(s.scalars(select(db.LoginLink.email))) == {"someone-else@example.com"}
+        for table in (db.Event, db.Feedback):
+            assert s.scalar(select(func.count()).select_from(table)) == 0
+    assert not leftovers.exists()
+
+    sign_in(client, "owner@example.com")  # the address can start again, with nothing
+    assert client.get("/aois").json() == []
+
+
 def make_event(grid, rows: slice, month: str, *statuses: tuple[str, str, str]) -> detection.Event:
     """A clearing over `rows`, first seen in `month`, then through `statuses`."""
     pixels = np.zeros((grid.height, grid.width), bool)

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type AoiDetail, api, type ChangeEvent, type Progress, type Scene } from "../api";
-import { type Theme, useLoad } from "../hooks";
+import { navigate, type Theme, useLoad } from "../hooks";
 import { CATEGORY } from "../lib/changes";
 import { formatArea } from "../lib/format";
 import { compareNote, defaultPair, monthKey, monthLabel } from "../lib/months";
@@ -11,7 +11,7 @@ import { CompareMap, type Layer } from "./CompareMap";
 import { LabelsCard, useLabelling } from "./Labels";
 import { BackfillCard, MonthCard, StatsCard } from "./Panels";
 import { ndviRange, Timeline, type TimelineMonth } from "./Timeline";
-import { ErrorState, LoadingState, Segmented } from "./ui";
+import { ConfirmDelete, ErrorState, LoadingState, Segmented } from "./ui";
 
 const POLL_MS = 2000;
 const FRAME_MS = 1000; // timelapse: one month per second
@@ -100,6 +100,7 @@ export function AreaPage({
         <aside className="panel">
           <BackfillCard progress={status} onRetry={startBackfill} />
           <StatsCard area={data} />
+          <DeleteCard area={data} />
         </aside>
       </AreaLayout>
     );
@@ -506,7 +507,23 @@ function Archive({
           }}
           onRetry={reloadPasses}
         />
+        <DeleteCard area={area} />
       </aside>
     </AreaLayout>
+  );
+}
+
+function DeleteCard({ area }: { area: AoiDetail }) {
+  return (
+    <section className="card" aria-label="Delete this area">
+      <ConfirmDelete
+        label="Delete this area"
+        warning={`This deletes ${area.name} for good: its imagery, the changes found in it, its alert settings and your feedback on them. A backfill still running for it stops.`}
+        onDelete={async () => {
+          await api.deleteArea(area.id);
+          navigate("#/");
+        }}
+      />
+    </section>
   );
 }

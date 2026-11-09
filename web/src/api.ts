@@ -250,6 +250,7 @@ export const api = {
   area: (id: number) => request<AoiDetail>(`/aois/${id}`),
   createArea: (name: string, geometry: Polygon) =>
     request<AoiSummary>("/aois", json("POST", { name, geometry })),
+  deleteArea: (id: number) => request<void>(`/aois/${id}`, { method: "DELETE" }),
   progress: (id: number) => request<Progress>(`/aois/${id}/progress`),
   backfill: (id: number) => request<Progress>(`/aois/${id}/backfill`, { method: "POST" }),
   timeline: async (id: number) =>
@@ -281,6 +282,7 @@ export const api = {
     request<Labels>(`/aois/${id}/labels`, json("PUT", labels)),
   signIn: (email: string) => request<{ minutes: number }>("/auth/login", json("POST", { email })),
   signOut: () => request<void>("/auth/logout", { method: "POST" }),
+  deleteAccount: () => request<void>("/auth/me", { method: "DELETE" }),
 };
 
 export const eventImageUrl = (areaId: number, eventId: number, side: "before" | "after") =>

@@ -7,6 +7,7 @@ Progress lives on the AOI's row, so it outlives the job.
 """
 
 import math
+import shutil
 import time
 from collections.abc import Callable
 from datetime import UTC, date, datetime
@@ -120,9 +121,34 @@ def retrain() -> None:
     )
 
 
-def _set(aoi_id: int, **values: object) -> None:
+def _set(aoi_id: int, **values: object) -> bool:
+    """Update the AOI's row; False when it is gone (its owner deleted it)."""
     with db.session() as s:
-        s.execute(update(db.Aoi).where(db.Aoi.id == aoi_id).values(**values))
+        return s.execute(update(db.Aoi).where(db.Aoi.id == aoi_id).values(**values)).rowcount > 0
+
+
+def remove_rasters(data_dir: Path, aoi_id: int) -> None:
+    """Delete everything on disk about an AOI: its cube, masks, composites and reports.
+    An AOI around someone's home is personal data, and so are the pictures of it."""
+    key = str(aoi_id)
+    for path in (
+        cube.cube_path(data_dir, key),
+        masking.mask_path(data_dir, key),
+        composites.composite_dir(data_dir, key),
+        data_dir / "reports" / key,
+    ):
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def _deleted(aoi_id: int, data_dir: Path) -> bool:
+    """Whether the AOI was deleted while its job was queued or running. If so, take away
+    whatever the job wrote since: the API removed the rasters when it deleted the row."""
+    with db.session() as s:
+        if s.get(db.Aoi, aoi_id) is not None:
+            return False
+    remove_rasters(data_dir, aoi_id)
+    logger.info("backfill {}: the AOI was deleted; stopped and removed its rasters", aoi_id)
+    return True
 
 
 def _start_run(aoi_id: int) -> int:
@@ -151,16 +177,18 @@ def _passes_from(aoi_id: int, catalog_name: str) -> int:
 
 def backfill(aoi_id: int, model: masking.CloudModel | None = None) -> None:
     cfg, data_dir = pipeline_config(), settings().data_dir
+    if _deleted(aoi_id, data_dir):
+        return
     with db.session() as s:
         aoi = s.get(db.Aoi, aoi_id)
-        if aoi is None:
-            raise LookupError(f"no AOI {aoi_id}")
         grid, start = aoi.grid(), aoi.archive_start
     logger.info("backfill {}: {:.2f} km², EPSG:{}", aoi_id, grid.area_km2, grid.epsg)
 
     def progress(done: int, total: int) -> None:
-        if done % PROGRESS_EVERY == 0 or done == total:
-            _set(aoi_id, progress_done=done, progress_total=total)
+        due = done % PROGRESS_EVERY == 0 or done == total
+        # A row that is gone stops the reads within a few passes of the AOI being deleted.
+        if due and not _set(aoi_id, progress_done=done, progress_total=total):
+            raise LookupError(f"AOI {aoi_id} was deleted")
 
     run = _start_run(aoi_id)
     fallback = cfg.catalog.fallback.name
@@ -200,10 +228,14 @@ def backfill(aoi_id: int, model: masking.CloudModel | None = None) -> None:
         sync_events(aoi_id, cfg, data_dir)
         _set(aoi_id, stage="ready")
     except Exception as exc:
+        if _deleted(aoi_id, data_dir):
+            return
         error = f"{type(exc).__name__}: {exc}"
         _set(aoi_id, stage="failed", error=error)
         _finish_run(run, "failed", error=error[:500], **stats, **searched())
         raise
+    if _deleted(aoi_id, data_dir):
+        return
     stats |= searched()
     # After "ready": the archive is complete either way. A failed email is retried on the
     # next run; only an error in sending itself (the database, say) fails the run.

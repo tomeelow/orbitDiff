@@ -109,6 +109,25 @@
 .btn-primary:hover {
   border-color: var(--color-ink);
 }
+.btn-quiet {
+  border-color: transparent;
+  padding: 0;
+  color: var(--color-muted);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.btn-quiet:hover {
+  border-color: transparent;
+  color: var(--color-error);
+}
+.btn-danger {
+  border-color: var(--color-error);
+  color: var(--color-error);
+  font-weight: 600;
+}
+.btn-danger:hover {
+  border-color: var(--color-ink);
+}
 .icon-btn {
   width: 36px;
   padding: 0;
@@ -183,6 +202,19 @@ kbd {
   font-size: var(--text-xs);
   text-align: center;
   color: var(--color-ink-2);
+}
+
+.confirm > p {
+  max-width: 60ch;
+  font-size: var(--text-sm);
+}
+.confirm .actions {
+  margin-top: var(--space-sm);
+}
+.account-end {
+  margin-top: var(--space-2xl);
+  padding-top: var(--space-md);
+  border-top: var(--rule-hair) solid var(--color-rule);
 }
 
 .muted {
