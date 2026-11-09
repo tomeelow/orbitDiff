@@ -640,7 +640,10 @@ volumes: { pg: {} }
 > - The production half, 2026-11-08 (`deploy/`, runbook in `docs/deploy.md`): a standalone compose file where Caddy is the only published port and TLS comes by itself; one origin, with the API under `/api`; a nightly `backup` service (checked Postgres dump with retention, rclone to any S3-compatible bucket, mirror of rasters); `release.yml`, which builds the images for a version tag and, if a machine is configured, moves it there. `main` never deploys itself.
 > - Rasters stay on the machine's disk, with object storage as a nightly mirror: a deliberate change from ADR-006 (ADR-014).
 > - Run locally end to end under a separate project name with local TLS: sign-in through Caddy with a Secure cookie, spoofed `X-Forwarded-For` ignored by the sign-in limit, a backfill of a new area through to tiles, a backup restored into a scratch database.
-> - Not yet (needs accounts): the machine, the domain, the email provider, the bucket, and a first run of `release.yml` and `deploy/update.sh`.
+> - Added 2026-11-10: `deploy/setup.sh` takes a fresh machine to a running, checked site. It fills in `deploy/.env` (asking only for what's empty, generating the two secrets), makes the folders, starts the newest version tag and runs `orbitdiff doctor`: the database and its migrations, the queue, the data folder, the tile server, the catalog and the sign-in to the email provider, each failure naming the settings behind it. `doctor --email` sends one test email.
+> - The production compose file names a build for each Orbit Diff image next to its registry name, so a machine that can't pull a version (a private package, or no release run yet) builds it from the checkout at that tag.
+> - Run 2026-11-10 in a Linux container against the local Docker, under a separate project name: `setup.sh` from an empty `.env` to a healthy stack with every check passing, sign-in through Caddy, and an area deleted while its backfill was reading (the worker stopped within seconds and left nothing on disk).
+> - Not yet (needs accounts): the machine, the domain, the email provider and the bucket.
 
 ---
 

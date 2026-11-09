@@ -122,7 +122,7 @@ until [ "$(docker compose ps api --format '{{.Health}}')" = healthy ]; do
 done
 
 if docker compose exec -T api orbitdiff doctor; then
-    say "everything checks out. Open https://$domain and sign in as $(get ORBITDIFF_ADMIN_EMAILS)."
+    say "everything checks out. Open https://$domain and sign in as $(get ORBITDIFF_ADMIN_EMAILS | tr -d '[]"')."
     say "to send yourself a test email first: docker compose exec api orbitdiff doctor --email you@example.com"
 else
     die "the stack is up, but a check failed (above). Fix deploy/.env and run deploy/setup.sh again."
