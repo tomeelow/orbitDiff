@@ -904,6 +904,51 @@ def test_not_a_real_change_from_the_email_and_from_the_app(client, detected):
     assert r.status_code == 204  # already recorded from the email: still one row
 
 
+def test_an_alert_email_can_stop_its_alerts_in_one_click(client, detected):
+    from email import message_from_bytes, policy
+
+    from orbitdiff import notify
+
+    aoi_id, grid, sync = detected
+    client.put(f"/aois/{aoi_id}/alert-rule", json=RULE | {"enabled": True})
+    watch_from(aoi_id, "2021-05-01")
+    sync(make_event(grid, slice(10, 20), "2021-05", ("pending", "S2A_new", "2021-05-05")))
+    notify.notify(aoi_id)
+    wire = client.outbox[0].as_bytes()
+    alert = message_from_bytes(wire, policy=policy.default)
+    text_part = alert.get_body(("plain",)).get_content()
+    link = next(w for w in text_part.split() if "/alerts-off/" in w)
+    # On the wire as a plain URL: mail clients don't decode an encoded-word header.
+    assert f"List-Unsubscribe: <{link}>".encode() in wire
+    assert alert["List-Unsubscribe-Post"] == "List-Unsubscribe=One-Click"
+    assert link in alert.get_body(("html",)).get_content()
+    path = urlsplit(link).path
+
+    client.cookies.clear()  # the link works without signing in
+    page = client.get(path)
+    assert page.status_code == 200 and 'method="post"' in page.text
+    with db.session() as s:
+        assert s.get(db.AlertRule, aoi_id).enabled  # opening the page changes nothing
+    body, _, mac = path.removeprefix("/alerts-off/").partition(".")
+    assert client.post(f"/alerts-off/{body}.{mac[::-1]}").status_code == 400  # tampered
+    feedback = next(w for w in text_part.split() if "/feedback/" in w)
+    token = urlsplit(feedback).path.removeprefix("/feedback/")
+    assert client.post(f"/alerts-off/{token}").status_code == 400  # signed for something else
+
+    # What a mail client's unsubscribe button sends.
+    assert client.post(path, data={"List-Unsubscribe": "One-Click"}).status_code == 200
+    assert client.post(path).status_code == 200  # twice is still off
+    with db.session() as s:
+        rule = s.get(db.AlertRule, aoi_id)
+        assert (rule.enabled, rule.watching_since) == (False, None)
+        assert rule.categories == RULE["categories"]  # the settings are kept for next time
+
+    confirmed = ("confirmed", "S2B_next", "2021-05-08T09:00")
+    seen = ("pending", "S2A_new", "2021-05-05")
+    sync(make_event(grid, slice(10, 20), "2021-05", seen, confirmed))
+    assert notify.notify(aoi_id) == 0  # not even the follow-up
+
+
 def test_polling_queues_each_watched_idle_aoi_once(client, aoi_polygon):
     watched = create(client, aoi_polygon).json()["id"]
     unwatched = create(client, aoi_polygon).json()["id"]

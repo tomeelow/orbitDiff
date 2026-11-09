@@ -1025,6 +1025,47 @@ def feedback_submit(token: str, s: SessionDep) -> HTMLResponse:
     )
 
 
+def _alerts_off_target(s: Session, token: str) -> db.Aoi | None:
+    payload = accounts.verify("alerts-off", token)
+    aoi = s.get(db.Aoi, payload["a"]) if payload else None
+    if aoi is None or aoi.user_id != payload["u"]:  # the AOI is gone or changed hands
+        return None
+    return aoi
+
+
+@app.get("/alerts-off/{token}")
+def alerts_off_page(token: str, s: SessionDep) -> HTMLResponse:
+    """The "Stop alerts for this area" link in an alert email. Like the feedback link, it
+    only asks: mail scanners open links before people do."""
+    aoi = _alerts_off_target(s, token)
+    if aoi is None:
+        return _page("This link no longer works", "<p>It has expired.</p>" + _home_link(), 400)
+    return _page(
+        "Stop alerts for this area?",
+        f"<p>No more emails about changes in {html.escape(aoi.name)}. The area and its "
+        "archive stay, and you can turn alerts back on in Orbit Diff.</p>"
+        '<form method="post"><button type="submit">Stop alerts</button></form>',
+    )
+
+
+@app.post("/alerts-off/{token}")
+def alerts_off(token: str, s: SessionDep) -> HTMLResponse:
+    """Turn the AOI's alerts off. Also what a mail client's unsubscribe button POSTs to."""
+    aoi = _alerts_off_target(s, token)
+    if aoi is None:
+        return _page("This link no longer works", "<p>It has expired.</p>" + _home_link(), 400)
+    row = s.get(db.AlertRule, aoi.id)
+    if row is not None and row.enabled:
+        row.enabled, row.watching_since = False, None
+        s.commit()
+        logger.info("alerts for AOI {} turned off from an email", aoi.id)
+    return _page(
+        "Alerts are off",
+        f"<p>You won't get emails about changes in {html.escape(aoi.name)}. "
+        "Turn them back on in Orbit Diff whenever you like.</p>" + _home_link(),
+    )
+
+
 @app.get("/health")
 def health(s: SessionDep, redis: RedisDep, response: Response) -> dict:
     checks = {}

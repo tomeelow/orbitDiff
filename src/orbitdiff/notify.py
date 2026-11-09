@@ -10,12 +10,16 @@ left alone: missing an email beats sending it twice.
 When more changes are due at once than anyone wants emails (`alerts.digest_over`), they
 share a digest. Every change in it still has its pictures, facts and "Not a real change"
 link, and is claimed on its own, so the once-only rule holds per change.
+
+Every alert email can stop the alerts it came from in one click, from its footer or from
+the mail client's own unsubscribe button, without signing in.
 """
 
 import html
 import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from email import policy
 from email.message import EmailMessage
 from email.utils import make_msgid
 
@@ -29,6 +33,9 @@ from orbitdiff.alerts import AlertRule
 from orbitdiff.aoi import reproject
 from orbitdiff.config import AlertsConfig, PipelineConfig, pipeline_config, settings
 
+# Headers up to the longest line SMTP allows. At the default 78, Python writes a long URL
+# in List-Unsubscribe as encoded words, which mail clients don't read as a link.
+WIRE = policy.default.clone(max_line_length=998)
 FOLLOW_UP = frozenset({"confirmed", "dismissed", "seasonal"})
 WHAT = {
     "buildings_roads": "new buildings or roads",
@@ -179,6 +186,13 @@ def feedback_link(event_id: int, user_id: int, cfg: PipelineConfig) -> str:
     days = cfg.alerts.feedback_link_days
     token = accounts.sign("feedback", {"e": event_id, "u": user_id}, timedelta(days=days))
     return f"{settings().api_url}/feedback/{token}"
+
+
+def alerts_off_link(aoi_id: int, user_id: int, cfg: PipelineConfig) -> str:
+    """A link that turns this AOI's alerts off without signing in, for this user."""
+    days = cfg.alerts.feedback_link_days
+    token = accounts.sign("alerts-off", {"a": aoi_id, "u": user_id}, timedelta(days=days))
+    return f"{settings().api_url}/alerts-off/{token}"
 
 
 def _day(at: str | datetime) -> str:
@@ -341,19 +355,22 @@ def alert_email(
         f"The latest passes over {aoi.name} show {len(notices)} changes. Each has its own "
         "pictures, and its own link to tell us if it isn't real."
     )
-    footer = (
-        f"You get this because alerts are on for {aoi.name}. Change or turn them off in Orbit Diff."
-    )
+    footer = f"You get this because alerts are on for {aoi.name}. Change them in Orbit Diff."
+    off = alerts_off_link(aoi.id, user.id, cfg)
 
-    msg = EmailMessage()
+    msg = EmailMessage(policy=WIRE)
     msg["Subject"] = f"{len(notices)} changes in {aoi.name}" if digest else notices[0].subject
     msg["To"] = user.email
+    # The mail client's own "unsubscribe" button: one POST, no sign-in (RFC 8058).
+    msg["List-Unsubscribe"] = f"<{off}>"
+    msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
     text = [
         line
         for n in notices
         for line in ([n.subject, ""] if digest else []) + _text_block(n) + [""]
     ]
-    msg.set_content("\n".join(([intro, ""] if digest else []) + text + [footer]))
+    stop = f"Stop alerts for this area: {off}"
+    msg.set_content("\n".join(([intro, ""] if digest else []) + text + [footer, stop]))
 
     e = html.escape
     rule = '<hr style="border:0;border-top:1px solid #e6e9ec;margin:24px 0">'
@@ -364,7 +381,8 @@ def alert_email(
 font:15px/1.5 -apple-system,'Segoe UI',Roboto,sans-serif;color:#1c2126">
 <div style="max-width:520px;margin:0 auto;background:#fff;border-radius:10px;padding:24px">
 {opening}{blocks}
-<p style="margin:0;font-size:12px;color:#5c6670">{e(footer)}</p>
+<p style="margin:0;font-size:12px;color:#5c6670">{e(footer)}
+<a href="{e(off)}" style="color:#5c6670">Stop alerts for this area</a></p>
 </div></body></html>""",
         subtype="html",
     )
