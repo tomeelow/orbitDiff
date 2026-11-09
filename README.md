@@ -250,7 +250,7 @@ uv run orbitdiff mask-report --id aoi_kyiv   # contact sheet: SCL alone vs SCL +
 ```
 
 Everything lands in `data/` (cubes, masks, composites, STAC cache), which is never
-committed. AOIs are capped at 10 km².
+committed. AOIs are capped at 10 km², and an account at five of them.
 
 ## What I'd do with more time
 
@@ -269,7 +269,8 @@ committed. AOIs are capped at 10 km².
   gap-fill distance, minimum mapping unit). No thresholds live in code.
 - **Environment** (`ORBITDIFF_*`, see `.env.example`): paths, database and Redis URLs,
   the email server (Mailpit in development), the URLs links in emails point to, the
-  signing key and the admins' addresses. `.env` is never committed.
+  signing key, the admins' addresses, and who may sign in (anyone, unless
+  `ORBITDIFF_INVITED_EMAILS` lists addresses). `.env` is never committed.
 
 ## Tests
 

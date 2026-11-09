@@ -177,8 +177,45 @@ def test_the_size_cap_is_enforced_at_the_api(client):
     assert client.queued == []
 
 
-def test_limits_report_the_configured_size_cap(client):
-    assert client.get("/limits").json() == {"max_area_km2": pipeline_config().aoi.max_km2}
+def test_limits_report_the_configured_caps(client):
+    cfg = pipeline_config().aoi
+    assert client.get("/limits").json() == {
+        "max_area_km2": cfg.max_km2,
+        "max_areas": cfg.max_per_user,
+        "invite_only": False,
+    }
+
+
+def test_an_account_can_watch_only_so_many_areas_unless_it_is_an_admin(
+    client, aoi_polygon, monkeypatch
+):
+    cap = pipeline_config().aoi.max_per_user
+    ids = [create(client, aoi_polygon).json()["id"] for _ in range(cap)]
+    refused = create(client, aoi_polygon)
+    assert refused.status_code == 409 and f"{cap} areas" in refused.json()["detail"]
+    assert client.queued == ids  # nothing was queued for the refused one
+
+    assert client.delete(f"/aois/{ids[0]}").status_code == 204  # deleting makes room
+    assert create(client, aoi_polygon).status_code == 201
+    assert create(client, aoi_polygon).status_code == 409
+
+    monkeypatch.setattr(settings(), "admin_emails", ["owner@example.com"])
+    assert create(client, aoi_polygon).status_code == 201  # the evaluation set needs dozens
+
+
+def test_by_invitation_only_invited_addresses_and_admins_get_a_link(client, monkeypatch):
+    monkeypatch.setattr(settings(), "invited_emails", ["Friend@Example.com"])
+    monkeypatch.setattr(settings(), "admin_emails", ["owner@example.com"])
+    assert client.get("/limits").json()["invite_only"] is True
+    client.cookies.clear()
+
+    answers = [
+        client.post("/auth/login", json={"email": address})
+        for address in ("stranger@example.com", "friend@example.com", "owner@example.com")
+    ]
+    assert {r.status_code for r in answers} == {202}
+    assert len({r.text for r in answers}) == 1  # the answer doesn't say who is invited
+    assert [m["To"] for m in client.outbox] == ["friend@example.com", "owner@example.com"]
 
 
 def test_unknown_aoi_is_404(client):

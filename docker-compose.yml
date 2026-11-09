@@ -20,6 +20,7 @@ x-app: &app
     ORBITDIFF_CORS_ORIGINS: '["http://localhost:8080"]'
     ORBITDIFF_SIGNING_KEY: ${ORBITDIFF_SIGNING_KEY:?set it in .env; see .env.example}
     ORBITDIFF_ADMIN_EMAILS: ${ORBITDIFF_ADMIN_EMAILS:-[]}
+    ORBITDIFF_INVITED_EMAILS: ${ORBITDIFF_INVITED_EMAILS:-[]}
     ORBITDIFF_MLFLOW_TRACKING_URI: sqlite:////app/data/mlflow/mlflow.db  # retraining candidates
   volumes: [./data:/app/data]
   depends_on:

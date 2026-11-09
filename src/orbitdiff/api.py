@@ -86,8 +86,12 @@ def current_user(s: SessionDep, token: SessionCookie = None) -> db.User:
 UserDep = Annotated[db.User, Depends(current_user)]
 
 
+def _addresses(emails: list[str]) -> set[str]:
+    return {e.strip().lower() for e in emails}
+
+
 def _is_admin(user: db.User) -> bool:
-    return user.email in {e.strip().lower() for e in settings().admin_emails}
+    return user.email in _addresses(settings().admin_emails)
 
 
 class Polygon(BaseModel):
@@ -157,11 +161,18 @@ class SceneOut(BaseModel):
 
 class Limits(BaseModel):
     max_area_km2: float  # the AOI size cap, shown while drawing
+    max_areas: int  # AOIs one account may have
+    invite_only: bool  # sign-in links go only to invited addresses
 
 
 @app.get("/limits")
 def limits() -> Limits:
-    return Limits(max_area_km2=pipeline_config().aoi.max_km2)
+    cfg = pipeline_config().aoi
+    return Limits(
+        max_area_km2=cfg.max_km2,
+        max_areas=cfg.max_per_user,
+        invite_only=bool(settings().invited_emails),
+    )
 
 
 def _aoi(s: Session, aoi_id: int, user: db.User) -> db.Aoi:
@@ -198,6 +209,13 @@ def create_aoi(
         grid = make_grid("new", shape(body.geometry.model_dump()), cfg.aoi.max_km2)
     except ValueError as exc:  # not a valid polygon, or over the size cap
         raise HTTPException(422, str(exc)) from exc
+    # Each AOI is hours of the one worker and its own rasters on disk. Admins build the
+    # evaluation set, which is dozens of areas.
+    owned = s.scalar(select(func.count()).select_from(db.Aoi).where(db.Aoi.user_id == user.id))
+    if owned >= cfg.aoi.max_per_user and not _is_admin(user):
+        raise HTTPException(
+            409, f"You can watch {cfg.aoi.max_per_user} areas. Delete one to draw another."
+        )
     aoi = db.Aoi(
         user_id=user.id,
         name=body.name,
@@ -703,7 +721,7 @@ class LinkSent(BaseModel):
 @app.post("/auth/login", status_code=202)
 def login(body: Login, s: SessionDep, redis: RedisDep, request: Request) -> LinkSent:
     """Email a sign-in link. The answer is the same whether or not the address has an
-    account, so it can't be used to find out who does."""
+    account, or is invited where sign-in is by invitation, so it can't be used to find out."""
     email = accounts.normalize_email(body.email)
     if email is None:
         raise HTTPException(422, "that doesn't look like an email address")
@@ -719,6 +737,11 @@ def login(body: Login, s: SessionDep, redis: RedisDep, request: Request) -> Link
             f"Too many sign-in links asked for. Try again in {cfg.login_limit_minutes} minutes.",
             headers={"Retry-After": str(cfg.login_limit_minutes * 60)},
         )
+    invited = _addresses(settings().invited_emails)
+    if invited and email not in invited | _addresses(settings().admin_emails):
+        # The same answer as for an invited address, so the list can't be read by trying.
+        logger.info("sign-in link not sent: the address isn't invited")
+        return LinkSent(minutes=cfg.login_link_minutes)
     token = accounts.new_login_link(s, email, cfg)
     s.commit()
     link = f"{settings().api_url}/auth/callback?token={token}"

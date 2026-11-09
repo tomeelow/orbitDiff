@@ -18,6 +18,7 @@ def raw() -> dict:
 def test_repo_config_loads():
     cfg = load_pipeline_config(PIPELINE_TOML)
     assert cfg.aoi.archive_start == date(2017, 1, 1)
+    assert cfg.aoi.max_per_user >= 1
     assert cfg.masking.scl_drop == {0, 1, 3, 8, 9, 10}
     assert 11 in cfg.masking.scl_flag  # snow is flagged, never silently dropped
 
