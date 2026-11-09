@@ -3,6 +3,10 @@
 # Caddy is the only service with a published port. TiTiler reads any file it's asked for and
 # the API checks who owns what, so browsers reach tiles only through the API (ADR-013).
 # Rasters stay on this machine's disk and are mirrored nightly (ADR-014).
+#
+# The four Orbit Diff images come from the registry when it has this version (the release
+# workflow pushes them), and are built here from this checkout when it doesn't: each service
+# names both, and `docker compose up` builds only what it couldn't pull.
 name: orbitdiff
 
 x-logging: &logging
@@ -13,6 +17,7 @@ x-logging: &logging
 x-app: &app
   <<: *logging
   image: ${ORBITDIFF_REGISTRY:?see .env.example}/orbitdiff-app:${ORBITDIFF_VERSION:?see .env.example}
+  build: { context: .. }
   restart: unless-stopped
   environment: &app-env
     ORBITDIFF_DATABASE_URL: postgresql+psycopg://orbitdiff:${POSTGRES_PASSWORD:?see .env.example}@db:5432/orbitdiff
@@ -71,6 +76,7 @@ services:
   worker:                                # backfills, alert emails, retraining candidates
     <<: *app
     image: ${ORBITDIFF_REGISTRY}/orbitdiff-worker:${ORBITDIFF_VERSION}
+    build: { context: .., args: { SYNC_ARGS: --group ml } }   # with PyTorch, for the models
     command: orbitdiff worker
     volumes: [./data:/app/data, ../eval:/app/eval:ro]
 
@@ -81,6 +87,7 @@ services:
   web:
     <<: *logging
     image: ${ORBITDIFF_REGISTRY}/orbitdiff-web:${ORBITDIFF_VERSION}
+    build: { context: ../web, args: { VITE_API_URL: /api } }
     restart: unless-stopped
 
   titiler:                               # renders map tiles from the composite COGs (ADR-007)
@@ -117,6 +124,7 @@ services:
   backup:                                # nightly; see deploy/backup.sh
     <<: *logging
     image: ${ORBITDIFF_REGISTRY}/orbitdiff-backup:${ORBITDIFF_VERSION}
+    build: { context: .., dockerfile: docker/backup.Dockerfile }
     restart: unless-stopped
     environment:
       PGHOST: db
