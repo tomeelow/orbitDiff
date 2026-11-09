@@ -80,7 +80,7 @@ max_min_ha = 5.0                  # top of that slider; its floor is detection.m
 send_attempts = 3                 # tries per email before it is given up and logged
 digest_over = 3                   # more emails than this due at once for an area become a digest
 digest_size = 10                  # changes per digest email
-feedback_link_days = 90           # how long an email's "Not a real change" link works
+feedback_link_days = 90           # how long an email's "Not a real change" and "Stop alerts" links work
 
 [monitoring]                      # the admin view (Phase 10); flags only, never acts
 precision_days = 90               # alert precision from feedback over this many days

@@ -71,7 +71,8 @@ display only and never count as evidence.
    once, with outlined before/after crops, size, NDVI, how much of it changed on the passes
    that decided it, status and method, then at most once more when it's confirmed,
    dismissed or found seasonal. Each email is claimed in the database before it's sent, so
-   a retried job never sends it twice. Many changes at once arrive as a digest.
+   a retried job never sends it twice. Many changes at once arrive as a digest. Every email
+   can stop its area's alerts in one click, without signing in.
 9. **Feedback.** "Not a real change", from the email (a signed link that needs no sign-in)
    or the app, is stored with the change's full provenance. It is the precision signal and
    training data, and it only measures precision: people only see what alerted.
