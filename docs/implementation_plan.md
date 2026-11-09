@@ -663,6 +663,8 @@ volumes: { pg: {} }
 ### Blog post (400–600 words)
 Problem → approach → the one decision worth explaining (confirmation on a second clear pass, or the processing-baseline offset that fakes a change in January 2022) → one surprising finding from the evaluation set → link to the live demo.
 
+> **As built (2026-11-10):** the README covers sections 1 to 7 and 9, with real figures where they exist and a plain "no benchmark yet" where they don't. Still open, and waiting on a deployment and verified labels rather than on code: the benchmark table, the gallery of false alerts, the GIF, the blog post's finding and demo link, and the video.
+
 ### Demo video (90 seconds)
 Draw an area, watch the backfill fill the timeline, play the timelapse, swipe across a change, open an event's NDVI series, then show the alert email and click "Not a real change".
 
