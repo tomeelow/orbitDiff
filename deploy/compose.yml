@@ -103,7 +103,9 @@ services:
 
   db:
     <<: *logging
-    image: postgis/postgis:17-3.7        # amd64 only: choose an x86 machine
+    # postgis/postgis publishes x86-64 only. This build has arm64 too, and comes from the
+    # same Dockerfiles.
+    image: imresamu/postgis:17-3.6.1-trixie
     restart: unless-stopped
     environment:
       POSTGRES_USER: orbitdiff

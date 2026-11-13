@@ -14,8 +14,10 @@ command -v git >/dev/null || die "git is missing."
 command -v openssl >/dev/null || die "openssl is missing."
 docker compose version >/dev/null 2>&1 ||
     die "Docker with the compose plugin is missing: https://docs.docker.com/engine/install/"
-[ "$(uname -m)" = x86_64 ] ||
-    say "this machine is $(uname -m): the PostGIS image is x86-64 only and will run emulated, slowly."
+case "$(uname -m)" in
+    x86_64 | aarch64 | arm64) ;;
+    *) die "this machine is $(uname -m): the images are built for x86-64 and arm64 only." ;;
+esac
 
 if [ ! -f .env ]; then
     cp .env.example .env

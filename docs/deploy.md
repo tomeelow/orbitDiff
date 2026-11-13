@@ -12,13 +12,28 @@ those need your accounts.
 
 | What | Used for | Where it goes |
 |---|---|---|
-| A Linux **x86-64 machine** with Docker, SSH access, about 40 GB of disk and 4 GB of memory or more | Runs everything. The PostGIS image is amd64 only | n/a |
+| A Linux **x86-64 or arm64 machine** with Docker, SSH access, about 40 GB of disk and 4 GB of memory or more | Runs everything | n/a |
 | A **domain** with its A record pointing at the machine, ports 80 and 443 open | Caddy gets the certificate by itself | `ORBITDIFF_DOMAIN` |
 | An **email provider**'s SMTP host, username and password, and a verified sender | Sign-in links and alerts | `ORBITDIFF_SMTP_*`, `ORBITDIFF_MAIL_FROM` |
 | An **S3-compatible bucket** and an access key (optional, strongly advised) | Backups that survive losing the machine | `RCLONE_CONFIG_BACKUP_*`, `ORBITDIFF_BACKUP_BUCKET` |
 
 That's all. Earth Search needs no key and Planetary Computer issues an anonymous token. The
 database password and the signing key are generated on the machine.
+
+### On Oracle Cloud's free tier
+
+An Always Free Ampere (arm64) instance is enough. One thing differs from other providers:
+Oracle's Ubuntu images reject everything but SSH in the machine's own firewall, on top of the
+network's security list. Open ports 80 and 443 in both: an ingress rule on the subnet's
+security list, and on the machine
+
+```bash
+sudo iptables -I INPUT 6 -m state --state NEW -p tcp -m multiport --dports 80,443 -j ACCEPT
+```
+
+```bash
+sudo netfilter-persistent save
+```
 
 On memory: the stack used about 1.6 GB while a backfill was reading passes. The cloud model
 and detection add to that, so 8 GB leaves headroom. Disk: ten years of one area is under
@@ -65,8 +80,8 @@ into `data/models`.
 
 ### Where the images come from
 
-Pushing a version tag runs `.github/workflows/release.yml`, which builds the four images and
-pushes them to `ghcr.io/<owner>/`. `main` never deploys itself.
+Pushing a version tag runs `.github/workflows/release.yml`, which builds the four images for
+x86-64 and arm64 and pushes them to `ghcr.io/<owner>/`. `main` never deploys itself.
 
 ```bash
 git tag v1.1.0 && git push origin v1.1.0

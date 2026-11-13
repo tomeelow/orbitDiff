@@ -23,8 +23,13 @@ env:
   VERSION: ${{ inputs.tag || github.ref_name }}
 
 jobs:
-  images:
-    runs-on: ubuntu-latest
+  images:                                # each architecture on its own kind of runner
+    strategy:
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -61,11 +66,34 @@ jobs:
         run: |
           prefix="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}"
           for image in app worker web backup; do
-            docker push "$prefix/orbitdiff-$image:$VERSION"
+            docker tag "$prefix/orbitdiff-$image:$VERSION" "$prefix/orbitdiff-$image:$VERSION-$ARCH"
+            docker push "$prefix/orbitdiff-$image:$VERSION-$ARCH"
+          done
+        env:
+          ARCH: ${{ matrix.arch }}
+
+  manifests:                             # one name per image, whichever machine pulls it
+    needs: images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      packages: write
+    steps:
+      - name: Sign in to the registry
+        run: echo "$TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+        env:
+          TOKEN: ${{ github.token }}
+
+      - name: Join the two architectures under the version
+        run: |
+          prefix="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}"
+          for image in app worker web backup; do
+            docker buildx imagetools create --tag "$prefix/orbitdiff-$image:$VERSION" \
+              "$prefix/orbitdiff-$image:$VERSION-amd64" "$prefix/orbitdiff-$image:$VERSION-arm64"
           done
 
   deploy:
-    needs: images
+    needs: manifests
     if: vars.DEPLOY_HOST != ''
     runs-on: ubuntu-latest
     timeout-minutes: 15
