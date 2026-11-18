@@ -1,5 +1,11 @@
 # Orbit Diff
 
+[![ci](https://github.com/tomeelow/orbitDiff/actions/workflows/ci.yml/badge.svg)](https://github.com/tomeelow/orbitDiff/actions/workflows/ci.yml)
+![python](https://img.shields.io/badge/python-3.12-blue)
+![typescript](https://img.shields.io/badge/web-React%20%2B%20TypeScript-3178c6)
+![data](https://img.shields.io/badge/data-Copernicus%20Sentinel--2-1f6f43)
+[![license: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 Watch places for change from orbit. Draw a polygon around an area you care about, browse
 about ten years of Sentinel-2 imagery over it as cloud-free monthly composites, see what
 changed (new buildings and roads, forest loss, solar farms, water), and get an email when
@@ -13,6 +19,22 @@ that survives clouds, haze, seasons and sensor quirks before it reaches your inb
 *Grünheide, near Berlin: March 2019 left of the divider, March 2020 right of it. The yellow
 outline is the 90 ha clearing for the Tesla factory, found and confirmed by the pipeline.
 Imagery: Copernicus Sentinel-2.*
+
+## At a glance
+
+| | |
+|---|---|
+| **What it is** | A full-stack satellite change-detection product: area drawing, a 10-year imagery archive, change detection, confirmation, and email alerts with feedback |
+| **Signal over noise** | Over ten years of an 8.5 km² area, 1,604 candidate changes were cut to **232 confirmed** by masking, anniversary comparison, a minimum mapping unit and confirmation by a later clear pass |
+| **Cost-aware reads** | Windowed HTTP range reads of Cloud-Optimized GeoTIFFs: **3.4 GB read of the 324 GB** an area's 1,406 passes hold (about 1%) |
+| **Deep learning** | A Siamese U-Net for buildings, trained on OSCD (F1 0.392 on the official test cities), registered in MLflow and kept out of production by a promotion gate until it beats the baseline on a verified evaluation set |
+| **Production engineering** | FastAPI, Postgres + PostGIS, Redis/RQ workers, TiTiler, Alembic migrations, Docker Compose, a one-script Caddy deployment with backups, an admin page for alert precision and pipeline health, and CI on every change |
+| **Web app** | React + TypeScript with MapLibre and Terra Draw: draw an area, swipe between months, NDVI, single passes, alert rules with a live preview |
+
+**What it shows about how I work:** measure before building (the [spikes](docs/spikes.md)
+found a catalog metadata bug that would have subtracted the processing offset twice),
+write decisions down ([ADRs](docs/ADR.md)), keep thresholds in config rather than in code,
+and say what isn't done yet, such as the benchmark that waits on verified labels.
 
 ## Why it's hard
 
@@ -375,3 +397,9 @@ replace it.
 - [`docs/spikes.md`](docs/spikes.md): the measurements behind them: archive coverage,
   the offset in metadata versus pixels, read cost, catalog fallback.
 - [`CLAUDE.md`](CLAUDE.md): working rules for this repository.
+
+## License
+
+The code is released under the [MIT License](LICENSE). Sentinel-2 imagery is Copernicus
+data, and Hansen Global Forest Change is CC BY 4.0 (see [Data and attribution](#data-and-attribution)).
+Neither is redistributed in this repository.
