@@ -105,9 +105,9 @@ if command -v getent >/dev/null && ! getent hosts "$domain" >/dev/null; then
 fi
 
 # The containers run as user 1000. Docker would create missing folders as root, and the
-# worker couldn't write to them.
-mkdir -p data backups
-for folder in data backups ../eval; do
+# worker couldn't write to them: data/composites too, which TiTiler mounts on its own.
+mkdir -p data/composites backups
+for folder in data data/composites backups ../eval; do
     [ "$(stat -c %u "$folder")" = 1000 ] && continue
     if [ "$(id -u)" = 0 ]; then chown -R 1000:1000 "$folder"; else sudo chown -R 1000:1000 "$folder"; fi
 done

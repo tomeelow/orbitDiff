@@ -51,6 +51,22 @@ def test_an_email_is_sent_only_when_an_address_is_given(checks, monkeypatch, cap
     assert "sent to me@example.com" in capsys.readouterr().out
 
 
+def test_a_folder_in_the_data_folder_the_services_cant_write_to_is_not_healthy(
+    tmp_path, monkeypatch
+):
+    from orbitdiff.config import settings
+
+    monkeypatch.setattr(settings(), "data_dir", tmp_path)
+    composites = tmp_path / "composites"
+    composites.mkdir()
+    composites.chmod(0o555)  # as Docker leaves a bind-mount folder it creates: root's
+    try:
+        with pytest.raises(PermissionError, match="composites"):
+            {c.name: c for c in doctor.CHECKS}["data folder"].run()
+    finally:
+        composites.chmod(0o755)
+
+
 def test_a_setup_with_no_signing_key_or_admins_is_not_healthy(monkeypatch):
     from orbitdiff.config import settings
 
