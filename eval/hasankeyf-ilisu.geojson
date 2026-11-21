@@ -1,0 +1,4 @@
+{"type": "FeatureCollection", "features": [
+{"type": "Feature", "properties": {"role": "aoi", "first_month": "2017-01", "last_month": "2025-12", "hard_cases": []}, "geometry": {"type": "Polygon", "coordinates": [[[41.42625, 37.700914], [41.426955, 37.722527], [41.399746, 37.723084], [41.399049, 37.701471], [41.42625, 37.700914]]]}},
+{"type": "Feature", "properties": {"role": "event", "category": "water", "month": "2020-02", "source": "Wikipedia 'Ilısu Dam' and 'Hasankeyf': reservoir filling from July 2019, old town flooded early 2020"}, "geometry": {"type": "Polygon", "coordinates": [[[41.425933, 37.70858], [41.426139, 37.714884], [41.400066, 37.715418], [41.399862, 37.709114], [41.425933, 37.70858]]]}}
+]}

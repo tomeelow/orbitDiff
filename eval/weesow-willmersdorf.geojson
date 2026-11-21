@@ -1,0 +1,4 @@
+{"type": "FeatureCollection", "features": [
+{"type": "Feature", "properties": {"role": "aoi", "first_month": "2017-01", "last_month": "2025-12", "hard_cases": ["cropland"]}, "geometry": {"type": "Polygon", "coordinates": [[[13.730047, 52.641406], [13.729422, 52.662977], [13.693944, 52.662591], [13.694587, 52.641021], [13.730047, 52.641406]]]}},
+{"type": "Feature", "properties": {"role": "event", "category": "solar_industry", "month": "2020-03", "source": "EnBW fact sheet and press release: 164 ha, construction from March 2020, inaugurated late 2020"}, "geometry": {"type": "Polygon", "coordinates": [[[13.721771, 52.646442], [13.721441, 52.657766], [13.702226, 52.657557], [13.702562, 52.646233], [13.721771, 52.646442]]]}}
+]}

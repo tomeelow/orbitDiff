@@ -1,0 +1,4 @@
+{"type": "FeatureCollection", "features": [
+{"type": "Feature", "properties": {"role": "aoi", "first_month": "2017-01", "last_month": "2025-12", "hard_cases": []}, "geometry": {"type": "Polygon", "coordinates": [[[-121.565504, 50.221004], [-121.564856, 50.242583], [-121.598504, 50.242993], [-121.599136, 50.221415], [-121.565504, 50.221004]]]}},
+{"type": "Feature", "properties": {"role": "event", "category": "vegetation_loss", "month": "2021-07", "source": "Wikipedia '2021 Lytton wildfire': village and slopes burned 30 June 2021; BC Wildfire Service perimeter"}, "geometry": {"type": "Polygon", "coordinates": [[[-121.569627, 50.223754], [-121.569143, 50.239937], [-121.594377, 50.240245], [-121.594853, 50.224061], [-121.569627, 50.223754]]]}}
+]}

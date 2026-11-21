@@ -1,0 +1,4 @@
+{"type": "FeatureCollection", "features": [
+{"type": "Feature", "properties": {"role": "aoi", "first_month": "2017-01", "last_month": "2025-12", "hard_cases": []}, "geometry": {"type": "Polygon", "coordinates": [[[35.130905, 11.169077], [35.131063, 11.190767], [35.109095, 11.190923], [35.108938, 11.169232], [35.130905, 11.169077]]]}},
+{"type": "Feature", "properties": {"role": "event", "category": "water", "month": "2020-07", "source": "Wikipedia 'Grand Ethiopian Renaissance Dam': first filling of the reservoir in July 2020"}, "geometry": {"type": "Polygon", "coordinates": [[[35.128178, 11.171808], [35.128297, 11.188075], [35.111821, 11.188192], [35.111703, 11.171924], [35.128178, 11.171808]]]}}
+]}

@@ -1,0 +1,4 @@
+{"type": "FeatureCollection", "features": [
+{"type": "Feature", "properties": {"role": "aoi", "first_month": "2017-01", "last_month": "2025-12", "hard_cases": ["cropland"]}, "geometry": {"type": "Polygon", "coordinates": [[[-82.710658, 40.084402], [-82.711199, 40.106016], [-82.739346, 40.105596], [-82.738796, 40.083983], [-82.710658, 40.084402]]]}},
+{"type": "Feature", "properties": {"role": "event", "category": "buildings_roads", "month": "2022-07", "source": "Intel newsroom 'Intel Invests in Ohio': site preparation in 2022, groundbreaking September 2022"}, "geometry": {"type": "Polygon", "coordinates": [[[-82.715472, 40.089286], [-82.715766, 40.100993], [-82.734529, 40.100713], [-82.734232, 40.089006], [-82.715472, 40.089286]]]}}
+]}

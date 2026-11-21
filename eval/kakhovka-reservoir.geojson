@@ -1,0 +1,4 @@
+{"type": "FeatureCollection", "features": [
+{"type": "Feature", "properties": {"role": "aoi", "first_month": "2017-01", "last_month": "2025-12", "hard_cases": []}, "geometry": {"type": "Polygon", "coordinates": [[[34.415644, 47.50901], [34.416225, 47.530599], [34.384349, 47.530988], [34.383781, 47.509399], [34.415644, 47.50901]]]}},
+{"type": "Feature", "properties": {"role": "event", "category": "water", "month": "2023-06", "source": "Wikipedia 'Destruction of the Kakhovka Dam': reservoir drained after 6 June 2023"}, "geometry": {"type": "Polygon", "coordinates": [[[34.414341, 47.509926], [34.414873, 47.529715], [34.385654, 47.530072], [34.385133, 47.510283], [34.414341, 47.509926]]]}}
+]}

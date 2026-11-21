@@ -1,0 +1,4 @@
+{"type": "FeatureCollection", "features": [
+{"type": "Feature", "properties": {"role": "aoi", "first_month": "2017-01", "last_month": "2025-12", "hard_cases": []}, "geometry": {"type": "Polygon", "coordinates": [[[-112.146897, 33.7693], [-112.147186, 33.790942], [-112.173106, 33.790698], [-112.172811, 33.769057], [-112.146897, 33.7693]]]}},
+{"type": "Feature", "properties": {"role": "event", "category": "buildings_roads", "month": "2021-04", "source": "Wikipedia 'TSMC Arizona' (Fab 21, about 33.78 N 112.16 W): construction began April 2021"}, "geometry": {"type": "Polygon", "coordinates": [[[-112.152381, 33.775562], [-112.152501, 33.78458], [-112.16762, 33.784437], [-112.167498, 33.77542], [-112.152381, 33.775562]]]}}
+]}

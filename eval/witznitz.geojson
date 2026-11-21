@@ -1,0 +1,4 @@
+{"type": "FeatureCollection", "features": [
+{"type": "Feature", "properties": {"role": "aoi", "first_month": "2017-01", "last_month": "2025-12", "hard_cases": []}, "geometry": {"type": "Polygon", "coordinates": [[[12.452734, 51.139595], [12.451546, 51.161155], [12.417258, 51.160402], [12.418462, 51.138843], [12.452734, 51.139595]]]}},
+{"type": "Feature", "properties": {"role": "event", "category": "solar_industry", "month": "2022-10", "source": "S&P Global (June 2022) and GEM wiki 'Witznitz solar farm' (phase 3 about 51.149 N 12.438 E): construction from autumn 2022, opened July 2024"}, "geometry": {"type": "Polygon", "coordinates": [[[12.448251, 51.143095], [12.447458, 51.157468], [12.421745, 51.156904], [12.422546, 51.142531], [12.448251, 51.143095]]]}}
+]}

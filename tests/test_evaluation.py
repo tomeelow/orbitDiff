@@ -7,6 +7,7 @@ import pytest
 from shapely.geometry import box, mapping
 
 from orbitdiff.alerts import AlertRule
+from orbitdiff.aoi import make_grid
 from orbitdiff.config import pipeline_config
 from orbitdiff.detection import Event
 from orbitdiff.evaluation import (
@@ -114,6 +115,16 @@ def test_eval_files_load_and_any_edit_changes_the_version(tmp_path):
     assert site.evaluated_months == 96 - 12
     write("2020-03")
     assert load_eval_set(tmp_path)[1] != version
+
+
+def test_the_committed_set_loads_and_every_area_fits_the_cap():
+    """eval/ as `orbitdiff evaluate` reads it: each area under the AOI size cap, as the app
+    would draw it, and every change inside its area (the app clips labels to it)."""
+    aois, _ = load_eval_set()
+    cap = pipeline_config().aoi.max_km2
+    for a in aois:
+        make_grid(a.name, a.geometry, cap)
+        assert all(a.geometry.contains(label.footprint) for label in a.labels), a.name
 
 
 def site(*events: tuple[str, str]) -> dict:

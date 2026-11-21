@@ -1,0 +1,5 @@
+{"type": "FeatureCollection", "features": [
+{"type": "Feature", "properties": {"role": "aoi", "first_month": "2017-01", "last_month": "2025-12", "hard_cases": []}, "geometry": {"type": "Polygon", "coordinates": [[[13.811921, 52.383392], [13.811341, 52.404965], [13.77607, 52.404605], [13.776667, 52.383033], [13.811921, 52.383392]]]}},
+{"type": "Feature", "properties": {"role": "event", "category": "vegetation_loss", "month": "2020-02", "source": "Wikipedia 'Gigafactory Berlin-Brandenburg': about 92 ha of pine plantation cleared in February 2020"}, "geometry": {"type": "Polygon", "coordinates": [[[13.801456, 52.39003], [13.801237, 52.398119], [13.786543, 52.39797], [13.786765, 52.38988], [13.801456, 52.39003]]]}},
+{"type": "Feature", "properties": {"role": "event", "category": "buildings_roads", "month": "2020-07", "source": "Wikipedia 'Gigafactory Berlin-Brandenburg': factory halls rose from mid-2020"}, "geometry": {"type": "Polygon", "coordinates": [[[13.799203, 52.391805], [13.799081, 52.396299], [13.788796, 52.396195], [13.788919, 52.3917], [13.799203, 52.391805]]]}}
+]}
