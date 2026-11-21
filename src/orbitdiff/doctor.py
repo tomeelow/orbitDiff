@@ -46,9 +46,12 @@ def _queue() -> str:
 def _data_dir() -> str:
     folder = settings().data_dir
     folder.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(dir=folder):
-        pass
-    return f"{folder} is writable"
+    # Docker makes a missing bind-mount source as root, even inside a folder the services
+    # own: TiTiler's data/composites is one.
+    for f in (folder, *(p for p in folder.iterdir() if p.is_dir())):
+        with tempfile.NamedTemporaryFile(dir=f):
+            pass
+    return f"{folder} and the folders in it are writable"
 
 
 def _get(url: str) -> None:
@@ -93,7 +96,11 @@ CHECKS = (
     Check("signing key", _signing_key, "ORBITDIFF_SIGNING_KEY"),
     Check("database", _database, "ORBITDIFF_DATABASE_URL, `alembic upgrade head`"),
     Check("queue", _queue, "ORBITDIFF_REDIS_URL"),
-    Check("data folder", _data_dir, "ORBITDIFF_DATA_DIR and who owns the folder"),
+    Check(
+        "data folder",
+        _data_dir,
+        "ORBITDIFF_DATA_DIR, and who owns it and its folders (deploy/setup.sh sets that)",
+    ),
     Check("map tiles", _tiles, "ORBITDIFF_TITILER_URL"),
     Check("imagery catalog", _catalog, "outbound HTTPS from this machine"),
     Check("email", _email, "ORBITDIFF_SMTP_* and ORBITDIFF_MAIL_FROM"),
