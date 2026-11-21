@@ -124,7 +124,8 @@ docker login ghcr.io
 
 If it can't pull them, nothing breaks: `docker compose up` builds the missing images from the
 checkout, which is at the same tag. The first build takes a while, mostly PyTorch for the
-worker.
+worker. Automatic updates, though, wait until the images can be pulled, so they never start
+on a machine that can't pull them.
 
 ## Who can use it
 
@@ -145,6 +146,23 @@ Admins can always sign in, and have no cap on areas.
 
 ## Updating
 
+Push a version tag and the machine moves to it by itself. `deploy/setup.sh` installs a cron
+job that runs `deploy/autoupdate.sh` every five minutes. When it finds a tag newer than the
+last one it deployed, it waits until the release workflow has published that tag's images,
+then runs `deploy/update.sh` with it. Nothing reaches into the machine: it asks GitHub, so SSH
+can stay closed to everyone but you. It logs only when it acts or waits:
+
+```bash
+journalctl -t orbitdiff-autoupdate
+```
+
+Each tag is deployed once. A failed update isn't retried, so read the log, fix the cause and
+run the update by hand. To roll back, run `update.sh` with the older tag: the machine stays
+there until a newer tag is pushed. To stop updates, remove the line from `crontab -e`, and
+re-run `deploy/setup.sh` to bring it back.
+
+By hand:
+
 ```bash
 deploy/update.sh v1.1.0
 ```
@@ -153,7 +171,8 @@ It checks out the tag, pulls or builds the images and restarts what changed. Mig
 first, and only go forward. To go back past a migration, restore a backup. Run it as the user
 that owns the checkout, or `git` can't write to `eval/`.
 
-To let GitHub do this when a tag is pushed, set on the repository:
+If you'd rather GitHub pushed each tag over SSH (port 22 open to its runners), set on the
+repository:
 
 - Variables `DEPLOY_HOST`, `DEPLOY_USER` and `DEPLOY_PATH` (the checkout's absolute path).
 - Secrets, in an environment named `production`: `DEPLOY_SSH_KEY`, a key that can log in

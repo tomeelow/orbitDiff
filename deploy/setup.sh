@@ -12,6 +12,7 @@ die() { printf 'setup: %s\n' "$*" >&2; exit 1; }
 
 command -v git >/dev/null || die "git is missing."
 command -v openssl >/dev/null || die "openssl is missing."
+command -v crontab >/dev/null || die "cron is missing: sudo apt-get install cron"
 docker compose version >/dev/null 2>&1 ||
     die "Docker with the compose plugin is missing: https://docs.docker.com/engine/install/"
 case "$(uname -m)" in
@@ -114,6 +115,12 @@ done
 
 say "starting Orbit Diff $version. The first start pulls or builds the images, which takes a while."
 ./update.sh "$version"
+
+# From here on, each new version tag deploys itself: deploy/autoupdate.sh.
+printf '%s\n' "$version" >.autoupdate-tag
+job="*/5 * * * * $PWD/autoupdate.sh 2>&1 | logger -t orbitdiff-autoupdate"
+{ crontab -l 2>/dev/null | grep -v orbitdiff-autoupdate || true; echo "$job"; } | crontab -
+say "new version tags deploy themselves within minutes of their images; log: journalctl -t orbitdiff-autoupdate"
 
 say "waiting for the API..."
 tries=0
