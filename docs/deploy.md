@@ -5,8 +5,9 @@ machine to a running, checked site.
 
 What has been run, and where: the setup script, the stack, sign-in through Caddy, a backfill,
 tiles, backups and a restore have all run on a laptop, with a local certificate and a local
-mail catcher. Nothing here has touched a real domain, a real email provider or a real bucket:
-those need your accounts.
+mail catcher. Since November 2026 the setup script, the stack, a real certificate and sign-in
+by real email also run at [orbitdiff.duckdns.org](https://orbitdiff.duckdns.org), on AWS (see
+below). Backups to a real bucket haven't been run yet.
 
 ## What you need to provide
 
@@ -38,6 +39,32 @@ sudo netfilter-persistent save
 On memory: the stack used about 1.6 GB while a backfill was reading passes. The cloud model
 and detection add to that, so 8 GB leaves headroom. Disk: ten years of one area is under
 500 MB.
+
+### On AWS's free plan
+
+The live site runs this way. A new account gets $100 in credits, up to $100 more for trying
+services, and closes after six months or when the credits run out. It's a trial, not a home.
+
+- **Region:** the Free plan keeps you to the region the account was given. Any works: the
+  imagery is read from Oregon, which only makes a backfill slower elsewhere, not dearer.
+- **Instance:** `m7i-flex.large` (2 vCPU, 8 GB), Ubuntu Server 24.04 x86, a 40 GiB gp3 root
+  volume (encrypted, at no cost). In Stockholm, with the volume and the IP address, it's about
+  $81 a month of credits. The smaller Free plan types have 2 GB or less, too little.
+- **Network:** a security group with SSH from your own IP only, and HTTP and HTTPS from
+  anywhere. Ubuntu on EC2 has no firewall of its own, unlike Oracle's. Attach an Elastic IP so
+  the address survives a stop and start.
+- **Docker:** `curl -fsSL https://get.docker.com | sudo sh`, then
+  `sudo usermod -aG docker ubuntu` and log in again.
+- Run `deploy/setup.sh` inside `tmux`: a dropped SSH connection otherwise ends it halfway.
+
+### Without a domain or an email provider
+
+A free [DuckDNS](https://www.duckdns.org) name (`something.duckdns.org`, its IP set to the
+machine's) gets a certificate like any domain. You can't add mail records to it, so send from
+a Gmail account instead: host `smtp.gmail.com`, the account as username, an
+[app password](https://myaccount.google.com/apppasswords) (it needs 2-Step Verification) as
+password, and the same address as sender, `Orbit Diff <you@gmail.com>`. Gmail sends about 500
+a day. The first emails may land in spam.
 
 ## First deploy
 
