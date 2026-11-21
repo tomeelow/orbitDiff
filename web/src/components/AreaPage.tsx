@@ -14,7 +14,14 @@ import { ndviRange, Timeline, type TimelineMonth } from "./Timeline";
 import { ConfirmDelete, ErrorState, LoadingState, Segmented } from "./ui";
 
 const POLL_MS = 2000;
-const FRAME_MS = 1000; // timelapse: one month per second
+const FRAME_MS = 1000; // timelapse at 1×: one month per second
+type Speed = "0.5" | "1" | "2" | "4";
+const SPEEDS: [Speed, string][] = [
+  ["0.5", "½×"],
+  ["1", "1×"],
+  ["2", "2×"],
+  ["4", "4×"],
+];
 
 export function AreaPage({
   id,
@@ -191,6 +198,7 @@ function Archive({
   const [source, setSource] = useState<"composite" | "pass">("composite");
   const [passId, setPassId] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState<Speed>("1");
 
   const [events, reloadEvents] = useLoad(
     () => api.events(area.id),
@@ -275,9 +283,9 @@ function Archive({
       const next = months[i + 1];
       if (next) move("B", next.key);
       else setPlaying(false);
-    }, FRAME_MS);
+    }, FRAME_MS / Number(speed));
     return () => window.clearTimeout(timer);
-  }, [playing, pair, index, months, move]);
+  }, [playing, speed, pair, index, months, move]);
 
   // A change opens on its comparison: A the month a year before, B the month it showed.
   const selectChange = useCallback(
@@ -468,6 +476,7 @@ function Archive({
               </svg>
               {playing ? "Pause" : "Play"}
             </button>
+            <Segmented label="Replay speed" value={speed} onChange={setSpeed} options={SPEEDS} />
           </div>
         </div>
         <Timeline
