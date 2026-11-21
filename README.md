@@ -14,6 +14,9 @@ a new satellite pass shows a change.
 A change map is easy to make. The point of this project is an alert you can trust: one
 that survives clouds, haze, seasons and sensor quirks before it reaches your inbox.
 
+**Live:** [orbitdiff.duckdns.org](https://orbitdiff.duckdns.org), one machine on AWS's free
+plan credits, so expect it to go away when they run out (around February 2027).
+
 ![The app on Grünheide: March 2019 on the left of the divider, March 2020 on the right, with the clearing for the Tesla factory outlined as a confirmed change](docs/app-grunheide.jpg)
 
 *Grünheide, near Berlin: March 2019 left of the divider, March 2020 right of it. The yellow
@@ -191,24 +194,22 @@ in [`docs/spikes.md`](docs/spikes.md), section 6.
 | 8. U-Net for buildings: trained, registered, gated (promotion waits for verified labels) | built |
 | 9. Accounts, alert rules, alert emails, feedback, deleting an area or an account | done |
 | 10. Monitoring, and retraining candidates from feedback | done |
-| 11. Docker Compose stack; production stack with one-script setup, releases and backups | ready to deploy |
+| 11. Docker Compose stack; production stack with one-script setup, releases and backups | deployed |
 | 12. Documentation (the benchmark waits for verified labels) | in progress |
 
 ### What's left, and why it isn't code
 
-Everything above runs. Three things need a person:
+Everything above runs, and since November 2026 it runs at
+[orbitdiff.duckdns.org](https://orbitdiff.duckdns.org). Two things need a person:
 
-1. **A deployment.** A machine, a domain and an email provider's credentials, then
-   `deploy/setup.sh` ([`docs/deploy.md`](docs/deploy.md)). The stack and the script have run
-   end to end locally, never against a real domain or mail provider.
-2. **A verified evaluation set.** 20 to 50 areas labelled in the app and checked against
+1. **A verified evaluation set.** 20 to 50 areas labelled in the app and checked against
    high-resolution imagery ([`eval/README.md`](eval/README.md)). Until it exists there is no
    benchmark table, every threshold in `config/pipeline.toml` stays provisional, and
    `orbitdiff promote` refuses to put the building model into production. This is the step
    that decides whether the alerts can be trusted, and nobody can label it from a keyboard
    without looking.
-3. **The story.** A blog post and a demo video want a live demo to link to and a finding from
-   that evaluation set.
+2. **The story.** A blog post and a demo video have a live demo to link to now, and want a
+   finding from that evaluation set.
 
 `mockup/orbit-diff.html` is an early sketch of the UI (synthetic imagery and events), not its final design.
 
@@ -227,7 +228,8 @@ Everything above runs. Three things need a person:
 One machine behind Caddy. You bring a Linux machine, a domain and an email provider's SMTP
 credentials; on the machine, `deploy/setup.sh` asks for them, generates the secrets, starts
 the stack and checks it with `orbitdiff doctor`. [`docs/deploy.md`](docs/deploy.md) has the
-details: who can sign in, updates, backups and how to restore them.
+details: who can sign in, updates, backups and how to restore them. The live site runs this
+way on an AWS EC2 m7i-flex.large, with a free DuckDNS name and Gmail for email.
 
 ## Running it locally
 
