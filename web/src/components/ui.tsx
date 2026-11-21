@@ -2,6 +2,39 @@
 error states. */
 
 import { useState } from "react";
+import type { BaseLayer } from "../hooks";
+
+/** Google Maps' corner switch: one button showing the base layer you'd switch to. */
+export function BaseLayerSwitch({
+  value,
+  onChange,
+}: {
+  value: BaseLayer;
+  onChange: (base: BaseLayer) => void;
+}) {
+  const other = value === "map" ? "satellite" : "map";
+  return (
+    <button
+      type="button"
+      className="map-switch"
+      data-show={other}
+      onClick={() => onChange(other)}
+      aria-label={`Show the ${other === "map" ? "street map" : "satellite imagery"} under the area`}
+    >
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        aria-hidden="true"
+      >
+        <path d="m12 3 9 5-9 5-9-5 9-5Z" />
+        <path d="m3 13 9 5 9-5" />
+      </svg>
+      {other === "map" ? "Map" : "Satellite"}
+    </button>
+  );
+}
 
 export function Segmented<T extends string>({
   label,

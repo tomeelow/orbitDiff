@@ -109,6 +109,25 @@
 .btn-primary:hover {
   border-color: var(--color-ink);
 }
+.btn svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+.btn-play {
+  min-width: 6.5rem;
+}
+/* Playing reads as a different state from across the screen: month A's blue, not B's orange. */
+.btn-playing,
+.btn-playing[aria-pressed="true"] {
+  background: var(--color-accent-2);
+  border-color: var(--color-accent-2);
+  color: var(--color-accent-2-ink);
+  font-weight: 600;
+}
+.btn-playing:hover {
+  border-color: var(--color-ink);
+}
 .btn-quiet {
   border-color: transparent;
   padding: 0;
@@ -414,6 +433,51 @@ kbd {
   translate: -50% -50%;
   background: var(--color-on-map);
   box-shadow: 0 0 0 1px var(--color-map-shade);
+}
+/* Map switches sit above MapLibre's scale bar, bottom left. */
+.map-switches {
+  position: absolute;
+  left: 10px;
+  bottom: 40px;
+  z-index: var(--z-map-ui);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2xs);
+}
+.map-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  min-height: 32px;
+  padding: 0 var(--space-xs);
+  border: var(--rule-hair) solid var(--color-rule);
+  border-radius: var(--radius);
+  background: var(--color-paper);
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-micro) var(--ease-out),
+    color var(--dur-micro) var(--ease-out);
+}
+.map-switch::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+}
+.map-switch:hover {
+  border-color: var(--color-muted);
+  color: var(--color-ink);
+}
+.map-switch[aria-pressed="true"],
+.map-switch[data-show] {
+  color: var(--color-ink);
+}
+.map-switch svg {
+  width: 16px;
+  height: 16px;
 }
 .readout {
   position: absolute;

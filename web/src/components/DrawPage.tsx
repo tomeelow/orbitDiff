@@ -7,9 +7,10 @@ import {
 import { useEffect, useRef, useState } from "react";
 import type { TerraDraw } from "terra-draw";
 import { ApiError, api } from "../api";
-import { navigate, type Theme, useLoad } from "../hooks";
+import { navigate, type Theme, useBaseLayer, useLoad } from "../hooks";
 import { type Polygon, polygonAreaKm2 } from "../lib/geo";
-import { createMap, drawPolygons, swapBasemap } from "../map";
+import { basemapFor, createMap, drawPolygons, swapBasemap } from "../map";
+import { BaseLayerSwitch } from "./ui";
 
 /** Draw one polygon, see its size against the cap, name it and start the backfill. */
 export function DrawPage({ theme }: { theme: Theme }) {
@@ -18,6 +19,9 @@ export function DrawPage({ theme }: { theme: Theme }) {
   const drawRef = useRef<TerraDraw | null>(null);
   const [polygon, setPolygon] = useState<Polygon | null>(null);
   const [finished, setFinished] = useState(false);
+  const [canUndo, setCanUndo] = useState(false);
+  const [base, setBase] = useBaseLayer();
+  const basemap = basemapFor(theme, base);
   const [name, setName] = useState("");
   const [goTo, setGoTo] = useState("");
   const [goToError, setGoToError] = useState<string | null>(null);
@@ -35,7 +39,7 @@ export function DrawPage({ theme }: { theme: Theme }) {
   // biome-ignore lint/correctness/useExhaustiveDependencies: the map is built once
   useEffect(() => {
     if (!container.current) return;
-    const map = createMap(container.current, theme, null);
+    const map = createMap(container.current, basemap, null);
     map.addControl(new NavigationControl({ showCompass: false }), "top-left");
     map.addControl(
       new GeolocateControl({ positionOptions: { enableHighAccuracy: false } }),
@@ -56,6 +60,7 @@ export function DrawPage({ theme }: { theme: Theme }) {
         setPolygon(latest ? (latest.geometry as Polygon) : null);
       });
       draw.on("finish", () => setFinished(true));
+      draw.on("history", () => setCanUndo(draw.canUndo()));
       drawRef.current = draw;
     });
     mapRef.current = map;
@@ -67,12 +72,12 @@ export function DrawPage({ theme }: { theme: Theme }) {
     };
   }, []);
 
-  const firstTheme = useRef(theme);
+  const shownBasemap = useRef(basemap);
   useEffect(() => {
-    if (!mapRef.current || theme === firstTheme.current) return;
-    firstTheme.current = theme;
-    swapBasemap(mapRef.current, theme);
-  }, [theme]);
+    if (!mapRef.current || basemap === shownBasemap.current) return;
+    shownBasemap.current = basemap;
+    swapBasemap(mapRef.current, basemap);
+  }, [basemap]);
 
   const area = polygon ? polygonAreaKm2(polygon) : 0;
   const cap = limits.state === "done" ? limits.data.max_area_km2 : null;
@@ -86,10 +91,17 @@ export function DrawPage({ theme }: { theme: Theme }) {
 
   function clear() {
     drawRef.current?.clear();
+    drawRef.current?.clearUndoRedoHistory();
     drawRef.current?.setMode("polygon");
     setPolygon(null);
     setFinished(false);
+    setCanUndo(false);
     setSubmit({ state: "idle" });
+  }
+
+  function undo() {
+    drawRef.current?.undo();
+    setCanUndo(drawRef.current?.canUndo() ?? false);
   }
 
   function jump(event: React.FormEvent) {
@@ -123,14 +135,19 @@ export function DrawPage({ theme }: { theme: Theme }) {
   return (
     <main className="screen draw">
       <div className="stage">
-        <div className="draw-map" ref={container} />
+        <div className="draw-map" ref={container}>
+          <div className="map-switches">
+            <BaseLayerSwitch value={base} onChange={setBase} />
+          </div>
+        </div>
       </div>
       <aside className="panel">
         <section className="card" aria-labelledby="draw-title">
           <h1 id="draw-title">New area</h1>
           <p className="muted">
             Click on the map to place corners. Click the first corner to close the shape, then drag
-            corners to adjust. Starting a new shape replaces the old one.
+            corners to adjust. Undo takes back the last corner (<kbd>Ctrl</kbd> <kbd>Z</kbd>).
+            Starting a new shape replaces the old one.
           </p>
           <form className="goto" onSubmit={jump}>
             <label htmlFor="goto">Go to coordinates</label>
@@ -200,6 +217,19 @@ export function DrawPage({ theme }: { theme: Theme }) {
               disabled={!ready || submit.state === "sending"}
             >
               {submit.state === "sending" ? "Starting…" : "Build the archive"}
+            </button>
+            <button type="button" className="btn" onClick={undo} disabled={!canUndo}>
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                aria-hidden="true"
+              >
+                <path d="M9 14 4 9l5-5" />
+                <path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" />
+              </svg>
+              Undo
             </button>
             <button type="button" className="btn" onClick={clear} disabled={!polygon}>
               Clear
