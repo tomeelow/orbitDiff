@@ -1,0 +1,4 @@
+{"type": "FeatureCollection", "features": [
+{"type": "Feature", "properties": {"role": "aoi", "first_month": "2017-01", "last_month": "2025-12", "hard_cases": ["snow"]}, "geometry": {"type": "Polygon", "coordinates": [[[21.125134, 64.709213], [21.125234, 64.730749], [21.074846, 64.730783], [21.074787, 64.709247], [21.125134, 64.709213]]]}},
+{"type": "Feature", "properties": {"role": "event", "category": "solar_industry", "month": "2018-06", "source": "Northvolt 'Construction begins at Northvolt Ett': ground preparation from 8 June 2018, Bergsbyn industrial area, Skellefteå"}, "geometry": {"type": "Polygon", "coordinates": [[[21.115721, 64.715502], [21.115759, 64.724475], [21.084274, 64.724496], [21.084246, 64.715523], [21.115721, 64.715502]]]}}
+]}

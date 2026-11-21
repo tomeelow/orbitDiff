@@ -1,0 +1,3 @@
+{"type": "FeatureCollection", "features": [
+{"type": "Feature", "properties": {"role": "aoi", "first_month": "2017-01", "last_month": "2025-12", "hard_cases": ["deciduous_forest"]}, "geometry": {"type": "Polygon", "coordinates": [[[10.446789, 51.069002], [10.447462, 51.090577], [10.413203, 51.090996], [10.412546, 51.069421], [10.446789, 51.069002]]]}}
+]}

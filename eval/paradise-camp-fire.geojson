@@ -1,0 +1,4 @@
+{"type": "FeatureCollection", "features": [
+{"type": "Feature", "properties": {"role": "aoi", "first_month": "2017-01", "last_month": "2025-12", "hard_cases": []}, "geometry": {"type": "Polygon", "coordinates": [[[-121.601214, 39.749023], [-121.600776, 39.770641], [-121.628791, 39.770975], [-121.62922, 39.749357], [-121.601214, 39.749023]]]}},
+{"type": "Feature", "properties": {"role": "event", "category": "vegetation_loss", "month": "2018-11", "source": "Wikipedia 'Camp Fire (2018)': Paradise burned on 8 November 2018; CAL FIRE perimeter"}, "geometry": {"type": "Polygon", "coordinates": [[[-121.603511, 39.750853], [-121.603147, 39.768868], [-121.626492, 39.769146], [-121.62685, 39.751131], [-121.603511, 39.750853]]]}}
+]}

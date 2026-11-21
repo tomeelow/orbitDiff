@@ -1,0 +1,3 @@
+{"type": "FeatureCollection", "features": [
+{"type": "Feature", "properties": {"role": "aoi", "first_month": "2017-01", "last_month": "2025-12", "hard_cases": ["snow"]}, "geometry": {"type": "Polygon", "coordinates": [[[11.635112, 46.528853], [11.636156, 46.550429], [11.604882, 46.551145], [11.60385, 46.529569], [11.635112, 46.528853]]]}}
+]}

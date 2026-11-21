@@ -1,0 +1,4 @@
+{"type": "FeatureCollection", "features": [
+{"type": "Feature", "properties": {"role": "aoi", "first_month": "2017-01", "last_month": "2025-12", "hard_cases": []}, "geometry": {"type": "Polygon", "coordinates": [[[-97.606686, 30.211042], [-97.606381, 30.232694], [-97.631316, 30.232957], [-97.631616, 30.211305], [-97.606686, 30.211042]]]}},
+{"type": "Feature", "properties": {"role": "event", "category": "buildings_roads", "month": "2020-07", "source": "Wikipedia 'Gigafactory Texas': site work began July 2020"}, "geometry": {"type": "Polygon", "coordinates": [[[-97.610759, 30.21695], [-97.610619, 30.226874], [-97.627242, 30.227049], [-97.62738, 30.217125], [-97.610759, 30.21695]]]}}
+]}

@@ -1,0 +1,4 @@
+{"type": "FeatureCollection", "features": [
+{"type": "Feature", "properties": {"role": "aoi", "first_month": "2017-01", "last_month": "2025-12", "hard_cases": ["cropland"]}, "geometry": {"type": "Polygon", "coordinates": [[[-6.166701, 38.358867], [-6.165858, 38.38047], [-6.193303, 38.381131], [-6.194138, 38.359528], [-6.166701, 38.358867]]]}},
+{"type": "Feature", "properties": {"role": "event", "category": "solar_industry", "month": "2019-03", "source": "Iberdrola 'Núñez de Balboa photovoltaic plant' and PV Tech: construction March to December 2019, Usagre (Badajoz)"}, "geometry": {"type": "Polygon", "coordinates": [[[-6.168882, 38.361623], [-6.16825, 38.377825], [-6.19112, 38.378376], [-6.191747, 38.362173], [-6.168882, 38.361623]]]}}
+]}

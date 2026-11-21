@@ -1,0 +1,4 @@
+{"type": "FeatureCollection", "features": [
+{"type": "Feature", "properties": {"role": "aoi", "first_month": "2017-01", "last_month": "2025-12", "hard_cases": ["deciduous_forest"]}, "geometry": {"type": "Polygon", "coordinates": [[[9.075001, 50.761199], [9.075035, 50.782782], [9.040991, 50.782799], [9.040972, 50.761216], [9.075001, 50.761199]]]}},
+{"type": "Feature", "properties": {"role": "event", "category": "vegetation_loss", "month": "2020-12", "source": "Wikipedia 'Dannenröder Forst': A49 motorway corridor cleared October to December 2020"}, "geometry": {"type": "Polygon", "coordinates": [[[9.058555, 50.762108], [9.05858, 50.781892], [9.057445, 50.781892], [9.057421, 50.762108], [9.058555, 50.762108]]]}}
+]}
