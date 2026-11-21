@@ -22,6 +22,9 @@ mlflow.db
 .env.*
 !.env.example
 
+# deploy/autoupdate.sh: the last tag it deployed, and its lock
+deploy/.autoupdate*
+
 # Python
 __pycache__/
 *.py[cod]
