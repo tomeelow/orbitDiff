@@ -605,6 +605,7 @@ kbd {
 .timeline-tools {
   margin-left: auto;
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-sm);
 }
 .keys {
