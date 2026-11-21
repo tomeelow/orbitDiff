@@ -11,20 +11,66 @@ import {
   setWorkerUrl,
 } from "maplibre-gl";
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
-import { TerraDraw, TerraDrawPolygonMode, ValidateNotSelfIntersecting } from "terra-draw";
+import {
+  TerraDraw,
+  TerraDrawModeUndoRedo,
+  TerraDrawPolygonMode,
+  TerraDrawUndoRedoKeyboardShortcuts,
+  ValidateNotSelfIntersecting,
+} from "terra-draw";
 import { TerraDrawMapLibreGLAdapter } from "terra-draw-maplibre-gl-adapter";
 import { API_URL, type ChangeEvent, type LabelChange } from "./api";
-import type { Theme } from "./hooks";
+import type { BaseLayer, Theme } from "./hooks";
 import { CATEGORY } from "./lib/changes";
 import type { Bounds, Polygon } from "./lib/geo";
 
 // MapLibre finds its worker next to its own module, which bundling moves; say where it is.
 setWorkerUrl(workerUrl);
 
-/** Basemaps under the imagery: OpenStreetMap data from OpenFreeMap, no key. */
-export const BASEMAP: Record<Theme, string> = {
+const ESRI = "https://server.arcgisonline.com/ArcGIS/rest/services";
+
+/** Recent high-resolution aerial and satellite imagery with place names over it, no key. It
+helps find a place to draw; it is never compared with the Sentinel-2 archive. */
+const SATELLITE: StyleSpecification = {
+  version: 8,
+  sources: {
+    "basemap-imagery": {
+      type: "raster",
+      tiles: [
+        import.meta.env.VITE_BASEMAP_SATELLITE ??
+          `${ESRI}/World_Imagery/MapServer/tile/{z}/{y}/{x}`,
+      ],
+      tileSize: 256,
+      maxzoom: 19,
+      attribution: "Imagery © Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+    },
+    "basemap-places": {
+      type: "raster",
+      tiles: [
+        import.meta.env.VITE_BASEMAP_SATELLITE_LABELS ??
+          `${ESRI}/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}`,
+      ],
+      tileSize: 256,
+      maxzoom: 19,
+    },
+  },
+  layers: [
+    { id: "basemap-imagery", type: "raster", source: "basemap-imagery" },
+    { id: "basemap-places", type: "raster", source: "basemap-places" },
+  ],
+};
+
+/** A basemap: the street map in the theme's colours, or satellite imagery in either theme. */
+export type Basemap = Theme | "satellite";
+
+export const basemapFor = (theme: Theme, base: BaseLayer): Basemap =>
+  base === "satellite" ? "satellite" : theme;
+
+/** Basemaps under the imagery. The street maps are OpenStreetMap data from OpenFreeMap, no key. */
+export const BASEMAP: Record<Basemap, string | StyleSpecification> = {
   dark: import.meta.env.VITE_BASEMAP_DARK ?? "https://tiles.openfreemap.org/styles/dark",
   light: import.meta.env.VITE_BASEMAP_LIGHT ?? "https://tiles.openfreemap.org/styles/positron",
+  satellite: SATELLITE,
 };
 
 /** MapLibre and Terra Draw take hex colours: Rim's accent and the outline over imagery. */
@@ -39,13 +85,13 @@ const ours = (id: string) => id.startsWith("od-") || id.startsWith("td");
 
 export function createMap(
   container: HTMLElement,
-  theme: Theme,
+  basemap: Basemap,
   bounds: Bounds | null,
   options: Partial<MapOptions> = {},
 ): MapLibreMap {
   return new MapLibreMap({
     container,
-    style: BASEMAP[theme],
+    style: BASEMAP[basemap],
     ...(bounds ? { bounds, fitBoundsOptions: { padding: 48 } } : { center: [15, 50], zoom: 3 }),
     attributionControl: { compact: true },
     dragRotate: false,
@@ -66,11 +112,11 @@ export function whenStyleReady(map: MapLibreMap, update: () => void): void {
   else update();
 }
 
-/** Switch the basemap for a theme, keeping the imagery, outline and drawing on top. */
-export function swapBasemap(map: MapLibreMap, theme: Theme): void {
+/** Switch the basemap, keeping the imagery, outline and drawing on top. */
+export function swapBasemap(map: MapLibreMap, basemap: Basemap): void {
   swapping.add(map);
   map.once("style.load", () => swapping.delete(map));
-  map.setStyle(BASEMAP[theme], {
+  map.setStyle(BASEMAP[basemap], {
     diff: false,
     transformStyle: (previous: StyleSpecification | undefined, next: StyleSpecification) => {
       if (!previous) return next;
@@ -274,10 +320,33 @@ export function setLabels(map: MapLibreMap, changes: LabelChange[]): void {
   );
 }
 
-/** Terra Draw on `map`, drawing polygons that may not cross themselves. Stop it to remove it. */
+const FOOTPRINT_LAYERS = [
+  "od-changes-fill",
+  "od-changes-casing",
+  "od-changes-line",
+  "od-changes-dash",
+  "od-labels-fill",
+  "od-labels-casing",
+  "od-labels-line",
+];
+
+/** Show or hide the change and label footprints, leaving the imagery clear to look at. */
+export function setFootprintsVisible(map: MapLibreMap, visible: boolean): void {
+  for (const id of FOOTPRINT_LAYERS) {
+    if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", visible ? "visible" : "none");
+  }
+}
+
+/** Terra Draw on `map`, drawing polygons that may not cross themselves. Stop it to remove it.
+While a shape is open, `undo()` (or Ctrl+Z, Cmd+Z) takes back the last corner. Session-level
+undo is left out on purpose: its first step after closing deletes the whole shape. */
 export function drawPolygons(map: MapLibreMap): TerraDraw {
   const draw = new TerraDraw({
     adapter: new TerraDrawMapLibreGLAdapter({ map }),
+    undoRedo: {
+      modeLevel: new TerraDrawModeUndoRedo(),
+      keyboardShortcuts: new TerraDrawUndoRedoKeyboardShortcuts(),
+    },
     modes: [
       new TerraDrawPolygonMode({
         editable: true,

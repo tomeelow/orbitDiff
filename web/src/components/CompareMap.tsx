@@ -9,22 +9,25 @@ import {
   type Scene,
   sceneImageUrl,
 } from "../api";
-import type { Theme } from "../hooks";
+import { type Theme, useBaseLayer } from "../hooks";
 import { formatLonLat, formatUtc } from "../lib/format";
 import { type Bounds, boundsOf, type LonLat, type Polygon } from "../lib/geo";
 import { monthKey, monthLabel } from "../lib/months";
 import { intersect, tilesCovering, tileUrl } from "../lib/tiles";
 import {
   addOutline,
+  basemapFor,
   createMap,
   drawPolygons,
   setChanges,
+  setFootprintsVisible,
   setLabels,
   setPassImage,
   setRaster,
   swapBasemap,
   whenStyleReady,
 } from "../map";
+import { BaseLayerSwitch } from "./ui";
 
 export type Layer = "true_color" | "ndvi";
 
@@ -79,6 +82,9 @@ export function CompareMap({
   const [split, setSplit] = useState(50);
   const [readout, setReadout] = useState<Readout | null>(null);
   const [tileError, setTileError] = useState(false);
+  const [footprints, setFootprints] = useState(true);
+  const [base, setBase] = useBaseLayer();
+  const basemap = basemapFor(theme, base);
   const bounds: Bounds = useMemo(() => boundsOf(area.corners), [area.corners]);
   const compare = a !== null;
 
@@ -89,8 +95,8 @@ export function CompareMap({
   // biome-ignore lint/correctness/useExhaustiveDependencies: the maps are built once per area
   useEffect(() => {
     if (!aRef.current || !bRef.current) return;
-    const mapB = createMap(bRef.current, theme, bounds);
-    const mapA = createMap(aRef.current, theme, bounds, {
+    const mapB = createMap(bRef.current, basemap, bounds);
+    const mapA = createMap(aRef.current, basemap, bounds, {
       interactive: false,
       attributionControl: false,
     });
@@ -163,13 +169,13 @@ export function CompareMap({
     };
   }, [area.id]);
 
-  const firstTheme = useRef(theme);
+  const shownBasemap = useRef(basemap);
   useEffect(() => {
-    if (!ready || !maps.current || theme === firstTheme.current) return;
-    firstTheme.current = theme;
-    swapBasemap(maps.current.a, theme);
-    swapBasemap(maps.current.b, theme);
-  }, [theme, ready]);
+    if (!ready || !maps.current || basemap === shownBasemap.current) return;
+    shownBasemap.current = basemap;
+    swapBasemap(maps.current.a, basemap);
+    swapBasemap(maps.current.b, basemap);
+  }, [basemap, ready]);
 
   const aUrl = a?.tiles[layer] ?? null;
   const bUrl = b?.tiles[layer] ?? null;
@@ -186,18 +192,22 @@ export function CompareMap({
     });
   }, [ready, aUrl, bUrl, passUrl, area.corners, bounds]);
 
+  // Footprint layers are created visible, so apply the toggle after every draw.
   useEffect(() => {
     const current = maps.current;
     if (!ready || !current) return;
     for (const map of [current.a, current.b])
-      whenStyleReady(map, () => setChanges(map, changes, selected));
-  }, [ready, changes, selected]);
+      whenStyleReady(map, () => {
+        setChanges(map, changes, selected);
+        setLabels(map, labels);
+        setFootprintsVisible(map, footprints);
+      });
+  }, [ready, changes, selected, labels, footprints]);
 
+  // Picking a change from the list means wanting to see it.
   useEffect(() => {
-    const current = maps.current;
-    if (!ready || !current) return;
-    for (const map of [current.a, current.b]) whenStyleReady(map, () => setLabels(map, labels));
-  }, [ready, labels]);
+    if (selected !== null) setFootprints(true);
+  }, [selected]);
 
   // Draw one footprint on B. The parent ends drawing when it has it, which removes Terra Draw.
   useEffect(() => {
@@ -320,6 +330,29 @@ export function CompareMap({
           />
         </div>
       )}
+      <div className="map-switches">
+        {(changes.length > 0 || labels.length > 0) && (
+          <button
+            type="button"
+            className="map-switch"
+            aria-pressed={footprints}
+            onClick={() => setFootprints((on) => !on)}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              aria-hidden="true"
+            >
+              <path d="M5 7 13 4l6 6-3 9-11-2Z" />
+              {!footprints && <path d="m3 3 18 18" />}
+            </svg>
+            Outlines
+          </button>
+        )}
+        <BaseLayerSwitch value={base} onChange={setBase} />
+      </div>
       {readout && <ReadoutLine readout={readout} />}
       {tileError && (
         <p className="map-error" role="alert">

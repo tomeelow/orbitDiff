@@ -453,7 +453,19 @@ function Archive({
                 ["B", "Cursor B"],
               ]}
             />
-            <button type="button" className="btn" aria-pressed={playing} onClick={togglePlay}>
+            <button
+              type="button"
+              className={playing ? "btn btn-play btn-playing" : "btn btn-play btn-primary"}
+              aria-pressed={playing}
+              onClick={togglePlay}
+            >
+              <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                {playing ? (
+                  <path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" />
+                ) : (
+                  <path d="M8 5.2v13.6a.6.6 0 0 0 .9.5l10.6-6.8a.6.6 0 0 0 0-1L8.9 4.7a.6.6 0 0 0-.9.5Z" />
+                )}
+              </svg>
               {playing ? "Pause" : "Play"}
             </button>
           </div>

@@ -74,6 +74,30 @@ export function useTheme(): [Theme, () => void] {
   return [theme, toggle];
 }
 
+/** What the maps show under the imagery: the street map or satellite imagery. */
+export type BaseLayer = "map" | "satellite";
+const BASE_LAYER_KEY = "orbitdiff.base-layer";
+
+/** The street map until the user picks satellite; the pick is remembered on this device. */
+export function useBaseLayer(): [BaseLayer, (base: BaseLayer) => void] {
+  const [base, setBase] = useState<BaseLayer>(() => {
+    try {
+      return localStorage.getItem(BASE_LAYER_KEY) === "satellite" ? "satellite" : "map";
+    } catch {
+      return "map";
+    }
+  });
+  const choose = useCallback((next: BaseLayer) => {
+    setBase(next);
+    try {
+      localStorage.setItem(BASE_LAYER_KEY, next);
+    } catch {
+      // storage blocked: the choice lasts for this visit
+    }
+  }, []);
+  return [base, choose];
+}
+
 export type Account =
   | { state: "loading" }
   | { state: "signed-out" }
